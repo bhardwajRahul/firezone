@@ -1,6 +1,6 @@
 <table class="table is-bordered is-hoverable is-striped is-fullwidth">
   <tbody>
-    <%= if has_role?(@current_user, :admin) do %>
+    <%= if FzHttpWeb.LiveAuth.has_role?(@current_user, :admin) do %>
       <tr>
         <td><strong>User</strong></td>
         <td>
@@ -19,16 +19,16 @@
       <td><%= @device.description %></td>
     </tr>
 
-    <%= if Application.fetch_env!(:fz_http, :wireguard_ipv4_enabled) do %>
+    <%= if FzHttp.Config.fetch_env!(:fz_http, :wireguard_ipv4_enabled) do %>
       <tr>
-        <td><strong>Interface IPv4</strong></td>
+        <td><strong>Tunnel IPv4</strong></td>
         <td><%= @device.ipv4 %></td>
       </tr>
     <% end %>
 
-    <%= if Application.fetch_env!(:fz_http, :wireguard_ipv6_enabled) do %>
+    <%= if FzHttp.Config.fetch_env!(:fz_http, :wireguard_ipv6_enabled) do %>
       <tr>
-        <td><strong>Interface IPv6</strong></td>
+        <td><strong>Tunnel IPv6</strong></td>
         <td><%= @device.ipv6 %></td>
       </tr>
     <% end %>
@@ -51,27 +51,27 @@
 
     <tr>
       <td><strong>Received</strong></td>
-      <td><%= FzCommon.FzInteger.to_human_bytes(@device.rx_bytes) %></td>
+      <td><%= to_human_bytes(@device.rx_bytes) %></td>
     </tr>
 
     <tr>
       <td><strong>Sent</strong></td>
-      <td><%= FzCommon.FzInteger.to_human_bytes(@device.tx_bytes) %></td>
+      <td><%= to_human_bytes(@device.tx_bytes) %></td>
     </tr>
 
     <tr>
       <td><strong>Allowed IPs</strong></td>
-      <td><%= @allowed_ips || "None" %></td>
+      <td><%= list_to_string(@allowed_ips) || "None" %></td>
     </tr>
 
     <tr>
       <td><strong>DNS Servers</strong></td>
-      <td><%= @dns || "None" %></td>
+      <td><%= list_to_string(@dns) || "None" %></td>
     </tr>
 
     <tr>
       <td><strong>Endpoint</strong></td>
-      <td><%= @endpoint %>:<%= @port %></td>
+      <td><%= @endpoint %></td>
     </tr>
 
     <tr>

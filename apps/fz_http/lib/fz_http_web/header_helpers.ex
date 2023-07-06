@@ -5,11 +5,17 @@ defmodule FzHttpWeb.HeaderHelpers do
 
   @remote_ip_headers ["x-forwarded-for"]
 
-  def external_trusted_proxies, do: conf(:external_trusted_proxies)
+  def external_trusted_proxies do
+    FzHttp.Config.fetch_env!(:fz_http, :external_trusted_proxies)
+    |> Enum.map(&to_string/1)
+  end
 
-  def clients, do: conf(:private_clients)
+  def clients do
+    FzHttp.Config.fetch_env!(:fz_http, :private_clients)
+    |> Enum.map(&to_string/1)
+  end
 
-  def proxied?, do: not (external_trusted_proxies() == false)
+  def proxied?, do: external_trusted_proxies() != []
 
   def remote_ip_opts do
     [
@@ -17,9 +23,5 @@ defmodule FzHttpWeb.HeaderHelpers do
       proxies: external_trusted_proxies(),
       clients: clients()
     ]
-  end
-
-  defp conf(key) when is_atom(key) do
-    Application.fetch_env!(:fz_http, key)
   end
 end

@@ -3,17 +3,13 @@ defmodule FzHttpWeb.AuthController do
   Implements the CRUD for a Session
   """
   use FzHttpWeb, :controller
-  require Logger
-
-  @local_auth_providers [:identity, :magic_link]
-
   alias FzHttp.Users
-  alias FzHttpWeb.Authentication
+  alias FzHttp.Auth
+  alias FzHttpWeb.Auth.HTML.Authentication
   alias FzHttpWeb.OAuth.PKCE
   alias FzHttpWeb.OIDC.State
   alias FzHttpWeb.UserFromAuth
-
-  import FzHttpWeb.OIDC.Helpers
+  require Logger
 
   # Uncomment when Helpers.callback_url/1 is fixed
   # alias Ueberauth.Strategy.Helpers
@@ -21,8 +17,6 @@ defmodule FzHttpWeb.AuthController do
   plug Ueberauth
 
   def request(conn, _params) do
-    # XXX: Helpers.callback_url/1 generates the wrong URL behind nginx.
-    # This is a bug in Ueberauth. auth_path is used instead.
     path = ~p"/auth/identity/callback"
 
     conn
@@ -30,9 +24,7 @@ defmodule FzHttpWeb.AuthController do
   end
 
   def callback(%{assigns: %{ueberauth_failure: %{errors: errors}}} = conn, _params) do
-    msg =
-      errors
-      |> Enum.map_join(". ", fn error -> error.message end)
+    msg = Enum.map_join(errors, ". ", fn error -> error.message end)
 
     conn
     |> put_flash(:error, msg)
@@ -42,7 +34,15 @@ defmodule FzHttpWeb.AuthController do
   def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
     case UserFromAuth.find_or_create(auth) do
       {:ok, user} ->
-        maybe_sign_in(conn, user, auth)
+        do_sign_in(conn, user, auth)
+
+      {:error, reason} when reason in [:not_found, :invalid_credentials] ->
+        conn
+        |> put_flash(
+          :error,
+          "Error signing in: user credentials are invalid or user does not exist"
+        )
+        |> request(%{})
 
       {:error, reason} ->
         conn
@@ -51,34 +51,33 @@ defmodule FzHttpWeb.AuthController do
     end
   end
 
-  def callback(conn, %{"provider" => "saml"}) do
-    key = {idp, _} = get_session(conn, "samly_assertion_key")
-    assertion = %Samly.Assertion{} = Samly.State.get_assertion(conn, key)
-
-    with {:ok, user} <-
-           UserFromAuth.find_or_create(:saml, idp, %{"email" => assertion.subject.name}) do
-      maybe_sign_in(conn, user, %{provider: idp})
-    end
+  # This can be called if the user attempts to visit one of the callback redirect URLs
+  # directly.
+  def callback(conn, params) do
+    conn
+    |> put_flash(:error, inspect(params) <> inspect(conn.assigns))
+    |> redirect(to: ~p"/")
   end
 
-  def callback(conn, %{"provider" => provider_key, "state" => state} = params) do
+  def oidc_callback(conn, %{"provider" => provider_id, "state" => state} = params)
+      when is_binary(provider_id) do
     token_params = Map.merge(params, PKCE.token_params(conn))
 
-    with {:ok, provider} <- atomize_provider(provider_key),
-         :ok <- State.verify_state(conn, state),
-         {:ok, tokens} <- openid_connect().fetch_tokens(provider, token_params),
-         {:ok, claims} <- openid_connect().verify(provider, tokens["id_token"]) do
-      case UserFromAuth.find_or_create(provider_key, claims) do
+    with :ok <- State.verify_state(conn, state),
+         {:ok, config} <- Auth.fetch_oidc_provider_config(provider_id),
+         {:ok, tokens} <- OpenIDConnect.fetch_tokens(config, token_params),
+         {:ok, claims} <- OpenIDConnect.verify(config, tokens["id_token"]) do
+      case UserFromAuth.find_or_create(provider_id, claims) do
         {:ok, user} ->
           # only first-time connect will include refresh token
           # XXX: Remove this when SCIM 2.0 is implemented
           with %{"refresh_token" => refresh_token} <- tokens do
-            FzHttp.OIDC.create_connection(user.id, provider_key, refresh_token)
+            FzHttp.Auth.OIDC.create_connection(user.id, provider_id, refresh_token)
           end
 
           conn
           |> put_session("id_token", tokens["id_token"])
-          |> maybe_sign_in(user, %{provider: provider})
+          |> do_sign_in(user, %{provider: provider_id})
 
         {:error, reason} ->
           conn
@@ -86,27 +85,45 @@ defmodule FzHttpWeb.AuthController do
           |> redirect(to: ~p"/")
       end
     else
-      {:error, reason} ->
-        msg = "OpenIDConnect Error: #{reason}"
-        Logger.warn(msg)
+      # Error verifying state, claims or fetching tokens
+      {:error, error} ->
+        msg = "An OpenIDConnect error occurred. Details: #{inspect(error)}"
+        Logger.error(msg)
 
         conn
         |> put_flash(:error, msg)
         |> redirect(to: ~p"/")
+    end
+  end
 
-      # Error verifying claims or fetching tokens
-      {:error, action, reason} ->
-        Logger.warn("OpenIDConnect Error during #{action}: #{inspect(reason)}")
+  def saml_callback(conn, _params) do
+    key = {idp, _} = get_session(conn, "samly_assertion_key")
+    assertion = %Samly.Assertion{} = Samly.State.get_assertion(conn, key)
 
+    with {:ok, user} <-
+           UserFromAuth.find_or_create(:saml, idp, %{"email" => assertion.subject.name}) do
+      do_sign_in(conn, user, %{provider: idp})
+    else
+      {:error, %{errors: [email: {"is invalid email address", _metadata}]}} ->
         conn
-        |> put_flash(:error, "Failed when performing this action: #{action}")
+        |> put_flash(
+          :error,
+          "SAML provider did not return a valid email address in `name` assertion"
+        )
         |> redirect(to: ~p"/")
+
+      {:error, reason} when is_binary(reason) ->
+        conn
+        |> put_flash(:error, reason)
+        |> redirect(to: ~p"/")
+
+      other ->
+        other
     end
   end
 
   def delete(conn, _params) do
-    conn
-    |> Authentication.sign_out()
+    Authentication.sign_out(conn)
   end
 
   def reset_password(conn, _params) do
@@ -114,32 +131,35 @@ defmodule FzHttpWeb.AuthController do
   end
 
   def magic_link(conn, %{"email" => email}) do
-    case Users.reset_sign_in_token(email) do
-      :ok ->
-        conn
-        |> put_flash(:info, "Please check your inbox for the magic link.")
-        |> redirect(to: ~p"/")
+    with {:ok, user} <- Users.fetch_user_by_email(email),
+         {:ok, user} <- Users.request_sign_in_token(user) do
+      FzHttpWeb.Mailer.AuthEmail.magic_link(user)
+      |> FzHttpWeb.Mailer.deliver!()
 
-      :error ->
+      conn
+      |> put_flash(:info, "Please check your inbox for the magic link.")
+      |> redirect(to: ~p"/")
+    else
+      {:error, :not_found} ->
         conn
         |> put_flash(:warning, "Failed to send magic link email.")
         |> redirect(to: ~p"/auth/reset_password")
     end
   end
 
-  def magic_sign_in(conn, %{"token" => token}) do
-    case Users.consume_sign_in_token(token) do
-      {:ok, user} ->
-        maybe_sign_in(conn, user, %{provider: :magic_link})
-
-      {:error, _} ->
+  def magic_sign_in(conn, %{"user_id" => user_id, "token" => token}) do
+    with {:ok, user} <- Users.fetch_user_by_id(user_id),
+         {:ok, _user} <- Users.consume_sign_in_token(user, token) do
+      do_sign_in(conn, user, %{provider: :magic_link})
+    else
+      {:error, _reason} ->
         conn
         |> put_flash(:error, "The magic link is not valid or has expired.")
         |> redirect(to: ~p"/")
     end
   end
 
-  def redirect_oidc_auth_uri(conn, %{"provider" => provider_key}) do
+  def redirect_oidc_auth_uri(conn, %{"provider" => provider_id}) when is_binary(provider_id) do
     verifier = PKCE.code_verifier()
 
     params = %{
@@ -149,43 +169,30 @@ defmodule FzHttpWeb.AuthController do
       code_challenge: PKCE.code_challenge(verifier)
     }
 
-    with {:ok, provider} <- atomize_provider(provider_key),
-         uri <- openid_connect().authorization_uri(provider, params) do
+    with {:ok, config} <- Auth.fetch_oidc_provider_config(provider_id),
+         {:ok, uri} <- OpenIDConnect.authorization_uri(config, params) do
       conn
       |> PKCE.put_cookie(verifier)
       |> State.put_cookie(params.state)
       |> redirect(external: uri)
     else
-      _ ->
-        msg = "OpenIDConnect error: provider #{provider_key} not found in config"
-        Logger.warn(msg)
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, reason} ->
+        Logger.error("Cannot redirect user to OIDC auth uri", reason: inspect(reason))
 
         conn
-        |> put_resp_content_type("text/plain")
-        |> send_resp(400, "OIDC Error. Check logs.")
-        |> halt()
+        |> put_flash(:error, "Error while processing OpenID request.")
+        |> redirect(to: ~p"/")
     end
   end
-
-  defp maybe_sign_in(conn, user, %{provider: provider} = auth)
-       when provider in @local_auth_providers do
-    if Conf.get!(:local_auth_enabled) do
-      do_sign_in(conn, user, auth)
-    else
-      conn
-      |> put_resp_content_type("text/plain")
-      |> send_resp(401, "Local auth disabled")
-      |> halt()
-    end
-  end
-
-  defp maybe_sign_in(conn, user, auth), do: do_sign_in(conn, user, auth)
 
   defp do_sign_in(conn, user, auth) do
     conn
     |> Authentication.sign_in(user, auth)
     |> configure_session(renew: true)
     |> put_session(:live_socket_id, "users_socket:#{user.id}")
-    |> redirect(to: root_path_for_role(user.role))
+    |> redirect(to: root_path_for_user(user))
   end
 end

@@ -1,35 +1,41 @@
 defmodule FzHttp.UsersFixtures do
-  @moduledoc """
-  This module defines test helpers for creating
-  entities via the `FzHttp.Users` context.
-  """
+  alias FzHttp.Repo
+  alias FzHttp.Users
+  alias FzHttp.SubjectFixtures
 
-  alias FzHttp.{Repo, Users, Users.User}
+  def user_attrs(attrs \\ %{}) do
+    Enum.into(attrs, %{
+      email: "test-#{counter()}@test",
+      password: "password1234",
+      password_confirmation: "password1234"
+    })
+  end
 
-  @doc """
-  Generate a user specified by email, or generate a new otherwise.
-  """
-  def user(attrs \\ %{}) do
-    email = attrs[:email] || "test-#{counter()}@test"
+  def create_user_with_role(role, attrs \\ %{}) do
+    attrs = Enum.into(attrs, %{})
 
-    case Repo.get_by(User, email: email) do
-      nil ->
-        {:ok, user} =
-          Users.create_user(
-            %{
-              email: email,
-              role: :admin,
-              password: "password1234",
-              password_confirmation: "password1234"
-            },
-            Enum.into(attrs, %{role: :admin})
-          )
+    {subject, attrs} =
+      Map.pop_lazy(attrs, :subject, fn ->
+        SubjectFixtures.new()
+        |> SubjectFixtures.set_permissions([
+          Users.Authorizer.manage_users_permission()
+        ])
+      end)
 
-        user
+    attrs = user_attrs(attrs)
 
-      %User{} = user ->
-        user
-    end
+    {:ok, user} = Users.create_user(role, attrs, subject)
+    user
+  end
+
+  def update(user, updates) do
+    user
+    |> Ecto.Changeset.change(Map.new(updates))
+    |> Repo.update!()
+  end
+
+  def disable(user) do
+    update(user, %{disabled_at: DateTime.utc_now()})
   end
 
   defp counter do

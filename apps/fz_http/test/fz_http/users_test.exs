@@ -1,391 +1,774 @@
 defmodule FzHttp.UsersTest do
   use FzHttp.DataCase, async: true
-
-  alias FzHttp.{Repo, Users}
+  import FzHttp.Users
+  alias FzHttp.SubjectFixtures
+  alias FzHttp.UsersFixtures
+  alias FzHttp.DevicesFixtures
+  alias FzHttp.Config
+  alias FzHttp.Users
 
   describe "count/0" do
-    setup :create_user
-
     test "returns correct count of all users" do
-      assert Users.count() == 1
+      assert count() == 0
+
+      UsersFixtures.create_user_with_role(:unprivileged)
+      assert count() == 1
+
+      UsersFixtures.create_user_with_role(:admin)
+      assert count() == 2
     end
   end
 
-  describe "count/1" do
-    setup :create_users
+  describe "fetch_count_by_role/0" do
+    setup do
+      subject =
+        SubjectFixtures.new()
+        |> SubjectFixtures.set_permissions([
+          Users.Authorizer.manage_users_permission()
+        ])
 
-    @tag count: 3
-    test "returns the correct count of admin users" do
-      assert Users.count(role: :admin) == 3
+      %{subject: subject}
     end
 
-    @tag count: 7, role: :unprivileged
-    test "returns the correct count of unprivileged users" do
-      assert Users.count(role: :unprivileged) == 7
+    test "returns 0 when there are no users", %{subject: subject} do
+      assert fetch_count_by_role(:unprivileged, subject) == 0
+      assert fetch_count_by_role(:admin, subject) == 0
+    end
+
+    test "returns correct count of admin users", %{subject: subject} do
+      UsersFixtures.create_user_with_role(:admin)
+      assert fetch_count_by_role(:admin, subject) == 1
+      assert fetch_count_by_role(:unprivileged, subject) == 0
+
+      UsersFixtures.create_user_with_role(:unprivileged)
+      assert fetch_count_by_role(:admin, subject) == 1
+      assert fetch_count_by_role(:unprivileged, subject) == 1
+
+      for _ <- 1..5, do: UsersFixtures.create_user_with_role(:unprivileged)
+      assert fetch_count_by_role(:admin, subject) == 1
+      assert fetch_count_by_role(:unprivileged, subject) == 6
+    end
+
+    test "returns error when subject can not view users", %{subject: subject} do
+      subject = SubjectFixtures.remove_permissions(subject)
+
+      assert fetch_count_by_role(:foo, subject) ==
+               {:error,
+                {:unauthorized,
+                 [missing_permissions: [Users.Authorizer.manage_users_permission()]]}}
     end
   end
 
-  describe "trimmed fields" do
-    test "trims expected fields" do
-      changeset =
-        Users.User.create_changeset(struct(Users.User), %{
-          "email" => " foo "
-        })
+  describe "fetch_user_by_id/2" do
+    test "returns error when user is not found" do
+      subject = SubjectFixtures.create_subject()
+      assert fetch_user_by_id(Ecto.UUID.generate(), subject) == {:error, :not_found}
+    end
 
-      assert %Ecto.Changeset{
-               changes: %{
-                 email: "foo"
-               }
-             } = changeset
+    test "returns error when id is not a valid UUIDv4" do
+      subject = SubjectFixtures.create_subject()
+      assert fetch_user_by_id("foo", subject) == {:error, :not_found}
+    end
+
+    test "returns user" do
+      user = UsersFixtures.create_user_with_role(:admin)
+      subject = SubjectFixtures.create_subject()
+      assert {:ok, returned_user} = fetch_user_by_id(user.id, subject)
+      assert returned_user.id == user.id
+    end
+
+    test "returns error when subject can not view users" do
+      subject = SubjectFixtures.create_subject()
+      subject = SubjectFixtures.remove_permissions(subject)
+
+      assert fetch_user_by_id("foo", subject) ==
+               {:error,
+                {:unauthorized,
+                 [missing_permissions: [Users.Authorizer.manage_users_permission()]]}}
     end
   end
 
-  describe "consume_sign_in_token/1 valid token" do
-    setup [:create_user_with_valid_sign_in_token]
+  describe "fetch_user_by_id/1" do
+    test "returns error when user is not found" do
+      assert fetch_user_by_id(Ecto.UUID.generate()) == {:error, :not_found}
+    end
 
-    test "returns user when token is valid", %{user: user} do
-      {:ok, signed_in_user} = Users.consume_sign_in_token(user.sign_in_token)
+    test "returns error when id is not a valid UUIDv4" do
+      assert fetch_user_by_id("foo") == {:error, :not_found}
+    end
 
+    test "returns user" do
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert {:ok, returned_user} = fetch_user_by_id(user.id)
+      assert returned_user.id == user.id
+    end
+  end
+
+  describe "fetch_user_by_id!/1" do
+    test "raises when user is not found" do
+      assert_raise(Ecto.NoResultsError, fn ->
+        fetch_user_by_id!(Ecto.UUID.generate())
+      end)
+    end
+
+    test "raises when id is not a valid UUIDv4" do
+      assert_raise(Ecto.Query.CastError, fn ->
+        assert fetch_user_by_id!("foo")
+      end)
+    end
+
+    test "returns user" do
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert returned_user = fetch_user_by_id!(user.id)
+      assert returned_user.id == user.id
+    end
+  end
+
+  describe "fetch_user_by_email/1" do
+    test "returns error when user is not found" do
+      assert fetch_user_by_email("foo@bar") == {:error, :not_found}
+    end
+
+    test "returns user" do
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert {:ok, returned_user} = fetch_user_by_email(user.email)
+      assert returned_user.id == user.id
+    end
+
+    test "email is not case sensitive" do
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert {:ok, user} = fetch_user_by_email(String.upcase(user.email))
+      assert {:ok, ^user} = fetch_user_by_email(String.downcase(user.email))
+    end
+  end
+
+  describe "fetch_user_by_id_or_email/2" do
+    setup do
+      subject = SubjectFixtures.create_subject()
+      %{subject: subject}
+    end
+
+    test "returns error when user is not found", %{subject: subject} do
+      assert fetch_user_by_id_or_email(Ecto.UUID.generate(), subject) == {:error, :not_found}
+      assert fetch_user_by_id_or_email("foo@bar.com", subject) == {:error, :not_found}
+      assert fetch_user_by_id_or_email("foo", subject) == {:error, :not_found}
+    end
+
+    test "returns user by id", %{subject: subject} do
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert {:ok, returned_user} = fetch_user_by_id_or_email(user.id, subject)
+      assert returned_user.id == user.id
+    end
+
+    test "returns user by email", %{subject: subject} do
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert {:ok, returned_user} = fetch_user_by_id_or_email(user.email, subject)
+      assert returned_user.id == user.id
+    end
+
+    test "returns error when subject can not view users", %{subject: subject} do
+      subject = SubjectFixtures.remove_permissions(subject)
+
+      assert fetch_user_by_id_or_email("foo", subject) ==
+               {:error,
+                {:unauthorized,
+                 [missing_permissions: [Users.Authorizer.manage_users_permission()]]}}
+    end
+  end
+
+  describe "list_users/2" do
+    test "returns empty list when there are not users" do
+      subject =
+        SubjectFixtures.new()
+        |> SubjectFixtures.set_permissions([
+          Users.Authorizer.manage_users_permission()
+        ])
+
+      assert list_users(subject) == {:ok, []}
+      assert list_users(subject, hydrate: [:device_count]) == {:ok, []}
+    end
+
+    test "returns list of users in all roles" do
+      user1 = UsersFixtures.create_user_with_role(:admin)
+      user2 = UsersFixtures.create_user_with_role(:unprivileged)
+
+      subject = SubjectFixtures.create_subject(user1)
+
+      assert {:ok, users} = list_users(subject)
+      assert length(users) == 2
+      assert Enum.sort(Enum.map(users, & &1.id)) == Enum.sort([user1.id, user2.id])
+    end
+
+    test "hydrates users with device count" do
+      user1 = UsersFixtures.create_user_with_role(:admin)
+      subject = SubjectFixtures.create_subject(user1)
+      DevicesFixtures.create_device(user: user1, subject: subject)
+
+      user2 = UsersFixtures.create_user_with_role(:unprivileged)
+      DevicesFixtures.create_device(user: user2, subject: subject)
+      DevicesFixtures.create_device(user: user2, subject: subject)
+
+      assert {:ok, users} = list_users(subject, hydrate: [:device_count])
+      assert length(users) == 2
+
+      assert Enum.sort(Enum.map(users, &{&1.id, &1.device_count})) ==
+               Enum.sort([{user1.id, 1}, {user2.id, 2}])
+
+      assert {:ok, users} = list_users(subject, hydrate: [:device_count, :device_count])
+
+      assert Enum.sort(Enum.map(users, &{&1.id, &1.device_count})) ==
+               Enum.sort([{user1.id, 1}, {user2.id, 2}])
+    end
+
+    test "returns error when subject can not view users" do
+      subject = SubjectFixtures.create_subject()
+      subject = SubjectFixtures.remove_permissions(subject)
+
+      assert list_users(subject) ==
+               {:error,
+                {:unauthorized,
+                 [missing_permissions: [Users.Authorizer.manage_users_permission()]]}}
+    end
+  end
+
+  describe "request_sign_in_token/1" do
+    test "returns user with updated sign-in token" do
+      user = UsersFixtures.create_user_with_role(:admin)
+      refute user.sign_in_token_hash
+
+      assert {:ok, user} = request_sign_in_token(user)
+      assert user.sign_in_token
+      assert user.sign_in_token_hash
+      assert user.sign_in_token_created_at
+    end
+  end
+
+  describe "consume_sign_in_token/1" do
+    test "returns user when token is valid" do
+      {:ok, user} =
+        UsersFixtures.create_user_with_role(:admin)
+        |> request_sign_in_token()
+
+      assert {:ok, signed_in_user} = consume_sign_in_token(user, user.sign_in_token)
       assert signed_in_user.id == user.id
     end
 
-    test "clears the sign in token when consumed", %{user: user} do
-      Users.consume_sign_in_token(user.sign_in_token)
+    test "clears the sign in token when consumed" do
+      {:ok, user} =
+        UsersFixtures.create_user_with_role(:admin)
+        |> request_sign_in_token()
 
-      assert is_nil(Users.get_user!(user.id).sign_in_token)
-      assert is_nil(Users.get_user!(user.id).sign_in_token_created_at)
+      assert {:ok, user} = consume_sign_in_token(user, user.sign_in_token)
+      assert is_nil(user.sign_in_token)
+      assert is_nil(user.sign_in_token_created_at)
+
+      assert user = Repo.one(Users.User)
+      assert is_nil(user.sign_in_token)
+      assert is_nil(user.sign_in_token_created_at)
+    end
+
+    test "returns error when token doesn't exist" do
+      user = UsersFixtures.create_user_with_role(:admin)
+
+      assert consume_sign_in_token(user, "foo") == {:error, :no_token}
+    end
+
+    test "token expires in one hour" do
+      about_one_hour_ago =
+        DateTime.utc_now()
+        |> DateTime.add(-1, :hour)
+        |> DateTime.add(30, :second)
+
+      {:ok, user} =
+        UsersFixtures.create_user_with_role(:admin)
+        |> request_sign_in_token()
+
+      user
+      |> Ecto.Changeset.change(sign_in_token_created_at: about_one_hour_ago)
+      |> Repo.update!()
+
+      assert {:ok, _user} = consume_sign_in_token(user, user.sign_in_token)
+    end
+
+    test "returns error when token is expired" do
+      one_hour_and_one_second_ago =
+        DateTime.utc_now()
+        |> DateTime.add(-1, :hour)
+        |> DateTime.add(-1, :second)
+
+      {:ok, user} =
+        UsersFixtures.create_user_with_role(:admin)
+        |> request_sign_in_token()
+
+      user =
+        user
+        |> Ecto.Changeset.change(sign_in_token_created_at: one_hour_and_one_second_ago)
+        |> Repo.update!()
+
+      assert consume_sign_in_token(user, user.sign_in_token) == {:error, :token_expired}
     end
   end
 
-  describe "consume_sign_in_token/1 invalid token" do
-    setup [:create_user_with_expired_sign_in_token]
-
-    test "returns {:error, msg} when token doesn't exist", %{user: _user} do
-      assert {:error, "Token invalid."} = Users.consume_sign_in_token("blah")
+  describe "create_user/3" do
+    setup do
+      subject = SubjectFixtures.create_subject()
+      %{subject: subject}
     end
 
-    test "returns {:error, msg} when token is expired", %{user: user} do
-      assert {:error, "Token invalid."} = Users.consume_sign_in_token(user.sign_in_token)
-    end
-  end
+    test "returns changeset error when required attrs are missing", %{subject: subject} do
+      assert {:error, changeset} = create_user(:unprivileged, %{}, subject)
+      refute changeset.valid?
 
-  describe "get_user!/1" do
-    setup [:create_user]
-
-    test "gets user by id", %{user: user} do
-      assert Users.get_user!(user.id).id == user.id
+      assert errors_on(changeset) == %{email: ["can't be blank"]}
     end
 
-    test "raises Ecto.NoResultsError for missing Users", %{user: _user} do
-      assert_raise(Ecto.NoResultsError, fn ->
-        Users.get_user!(0)
-      end)
-    end
-  end
+    test "returns error on invalid attrs", %{subject: subject} do
+      assert {:error, changeset} =
+               create_user(:unprivileged, %{email: "invalid_email", password: "short"}, subject)
 
-  describe "get_user/1" do
-    setup [:create_user]
+      refute changeset.valid?
 
-    test "returns user if found", %{user: user} do
-      assert Users.get_user(user.id).id == user.id
-    end
-
-    test "returns nil if not found" do
-      assert nil == Users.get_user(0)
-    end
-  end
-
-  describe "create_user/1" do
-    @valid_attrs_map %{
-      email: "valid@test",
-      password: "password1234",
-      password_confirmation: "password1234"
-    }
-    @valid_attrs_list [
-      email: "valid@test",
-      password: "password1234",
-      password_confirmation: "password1234"
-    ]
-    @invalid_attrs_map %{
-      email: "invalid_email",
-      password: "password1234",
-      password_confirmation: "password1234"
-    }
-    @invalid_attrs_list [
-      email: "valid@test",
-      password: "password1234",
-      password_confirmation: "different_password1234"
-    ]
-    @too_short_password [
-      email: "valid@test",
-      password: "short11",
-      password_confirmation: "short11"
-    ]
-    @too_long_password [
-      email: "valid@test",
-      password: String.duplicate("a", 65),
-      password_confirmation: String.duplicate("a", 65)
-    ]
-
-    test "doesn't create user with password too short" do
-      assert {:error, changeset} = Users.create_admin_user(@too_short_password)
-
-      assert changeset.errors[:password] == {
-               "should be at least %{count} character(s)",
-               [count: 12, validation: :length, kind: :min, type: :string]
+      assert errors_on(changeset) == %{
+               email: ["is invalid email address"],
+               password: ["should be at least 12 character(s)"],
+               password_confirmation: ["can't be blank"]
              }
+
+      assert {:error, changeset} =
+               create_user(
+                 :unprivileged,
+                 %{email: "invalid_email", password: String.duplicate("A", 65)},
+                 subject
+               )
+
+      refute changeset.valid?
+      assert "should be at most 64 character(s)" in errors_on(changeset).password
+
+      assert {:error, changeset} =
+               create_user(:unprivileged, %{email: String.duplicate(" ", 18)}, subject)
+
+      refute changeset.valid?
+
+      assert "can't be blank" in errors_on(changeset).email
     end
 
-    test "doesn't create user with password too long" do
-      assert {:error, changeset} = Users.create_admin_user(@too_long_password)
+    test "requires password confirmation to match the password", %{subject: subject} do
+      assert {:error, changeset} =
+               create_user(
+                 :unprivileged,
+                 %{password: "foo", password_confirmation: "bar"},
+                 subject
+               )
 
-      assert changeset.errors[:password] == {
-               "should be at most %{count} character(s)",
-               [count: 64, validation: :length, kind: :max, type: :string]
-             }
+      assert "does not match confirmation" in errors_on(changeset).password_confirmation
+
+      assert {:error, changeset} =
+               create_user(
+                 :unprivileged,
+                 %{
+                   password: "password1234",
+                   password_confirmation: "password1234"
+                 },
+                 subject
+               )
+
+      refute Map.has_key?(errors_on(changeset), :password_confirmation)
     end
 
-    test "creates user with valid map of attributes" do
-      assert {:ok, _user} = Users.create_admin_user(@valid_attrs_map)
+    test "returns error when email is already taken", %{subject: subject} do
+      attrs = UsersFixtures.user_attrs()
+      assert {:ok, _user} = create_user(:unprivileged, attrs, subject)
+      assert {:error, changeset} = create_user(:unprivileged, attrs, subject)
+      refute changeset.valid?
+      assert "has already been taken" in errors_on(changeset).email
     end
 
-    test "creates user with valid list of attributes" do
-      assert {:ok, _user} = Users.create_admin_user(@valid_attrs_list)
+    test "returns error when role is invalid", %{subject: subject} do
+      attrs = UsersFixtures.user_attrs()
+
+      assert_raise Ecto.ChangeError, fn ->
+        create_user(:foo, attrs, subject)
+      end
     end
 
-    test "doesn't create user with invalid map of attributes" do
-      assert {:error, _changeset} = Users.create_admin_user(@invalid_attrs_map)
+    test "creates a user in given role", %{subject: subject} do
+      for role <- [:admin, :unprivileged] do
+        attrs = UsersFixtures.user_attrs()
+        assert {:ok, user} = create_user(role, attrs, subject)
+        assert user.role == role
+      end
     end
 
-    test "doesn't create user with invalid list of attributes" do
-      assert {:error, _changeset} = Users.create_admin_user(@invalid_attrs_list)
-    end
-  end
-
-  describe "sign_in_keys/0" do
-    test "generates sign in token and created at" do
-      params = Users.sign_in_keys()
-
-      assert is_binary(params.sign_in_token)
-      assert %DateTime{} = params.sign_in_token_created_at
-    end
-  end
-
-  @change_password_valid_params %{
-    password: "new_password",
-    password_confirmation: "new_password",
-    current_password: "password1234"
-  }
-  @change_password_invalid_params %{
-    "password" => "new_password",
-    "password_confirmation" => "new_password",
-    "current_password" => "invalid"
-  }
-  @password_params %{"password" => "new_password", "password_confirmation" => "new_password"}
-  @email_params %{"email" => "new_email@test", "current_password" => "password1234"}
-  @email_and_password_params %{
-    "password" => "new_password",
-    "password_confirmation" => "new_password",
-    "email" => "new_email@test",
-    "current_password" => "password1234"
-  }
-  @clear_hash_params %{"password_hash" => nil, "current_password" => "password1234"}
-  @empty_password_params %{
-    "password" => nil,
-    "password_confirmation" => nil,
-    "current_password" => "password1234"
-  }
-  @email_empty_password_params %{
-    "email" => "foobar@test",
-    "password" => "",
-    "password_confirmation" => "",
-    "current_password" => "password1234"
-  }
-
-  describe "admin_update_user/2" do
-    setup :create_user
-
-    test "changes password", %{user: user} do
-      {:ok, new_user} = Users.admin_update_user(user, @password_params)
-      assert new_user.password_hash != user.password_hash
-    end
-
-    test "prevents clearing the password", %{user: user} do
-      {:ok, new_user} = Users.admin_update_user(user, @clear_hash_params)
-      assert new_user.password_hash == user.password_hash
-    end
-
-    test "nil password params", %{user: user} do
-      {:ok, new_user} = Users.admin_update_user(user, @empty_password_params)
-      assert new_user.password_hash == user.password_hash
-    end
-
-    test "changes email", %{user: user} do
-      {:ok, new_user} = Users.admin_update_user(user, @email_params)
-      assert new_user.email == "new_email@test"
-    end
-
-    test "handles empty params", %{user: user} do
-      assert {:ok, _new_user} = Users.admin_update_user(user, %{})
-    end
-
-    test "handles nil password", %{user: user} do
-      assert {:ok, _new_user} = Users.admin_update_user(user, @email_empty_password_params)
-    end
-
-    test "changes email and password", %{user: user} do
-      {:ok, new_user} = Users.admin_update_user(user, @email_and_password_params)
-      assert new_user.email == "new_email@test"
-      assert new_user.password_hash != user.password_hash
-    end
-  end
-
-  describe "unprivileged_update_self/2" do
-    setup :create_user
-
-    test "changes password", %{user: user} do
-      {:ok, new_user} = Users.unprivileged_update_self(user, @password_params)
-      assert new_user.password_hash != user.password_hash
-    end
-
-    test "prevents clearing the password", %{user: user} do
-      assert {:error, _changeset} = Users.unprivileged_update_self(user, @clear_hash_params)
-    end
-
-    test "prevents changing email", %{user: user} do
-      {:ok, new_user} = Users.unprivileged_update_self(user, @email_and_password_params)
-      assert new_user.email == user.email
-    end
-  end
-
-  describe "admin_update_self/2" do
-    setup :create_user
-
-    test "does not change password when current_password invalid", %{user: user} do
-      {:error, changeset} = Users.admin_update_self(user, @change_password_invalid_params)
-      assert [current_password: _] = changeset.errors
-    end
-
-    test "changes password when current_password valid", %{user: user} do
-      {:ok, new_user} = Users.admin_update_self(user, @change_password_valid_params)
-      assert new_user.password_hash != user.password_hash
-    end
-  end
-
-  describe "update_*" do
-    setup :create_user
-
-    @sign_in_token_params %{
-      sign_in_token: "foobar",
-      sign_in_token_created_at: DateTime.utc_now()
-    }
-
-    test "update sign_in_token", %{user: user} do
-      {:ok, new_user} = Users.update_user_sign_in_token(user, @sign_in_token_params)
-
-      assert new_user.sign_in_token == @sign_in_token_params.sign_in_token
-
-      {:ok, new_user} =
-        Users.update_user_sign_in_token(new_user, %{
-          sign_in_token: nil,
-          sign_in_token_created_at: nil
-        })
-
-      assert is_nil(new_user.sign_in_token)
-    end
-
-    test "update role", %{user: user} do
-      {:ok, user} = Users.update_user_role(user, :admin)
-      assert user.role == :admin
-
-      {:ok, user} = Users.update_user_role(user, :unprivileged)
+    test "creates an unprivileged user", %{subject: subject} do
+      attrs = UsersFixtures.user_attrs()
+      assert {:ok, user} = create_user(:unprivileged, attrs, subject)
       assert user.role == :unprivileged
+      assert user.email == attrs.email
+
+      assert FzHttp.Crypto.equal?(attrs.password, user.password_hash)
+      assert is_nil(user.password)
+      assert is_nil(user.password_confirmation)
+
+      assert is_nil(user.last_signed_in_at)
+      assert is_nil(user.last_signed_in_method)
+      assert is_nil(user.sign_in_token)
+      assert is_nil(user.sign_in_token_hash)
+      assert is_nil(user.sign_in_token_created_at)
     end
 
-    test "update last_signed_in_*", %{user: user} do
-      {:ok, user} = Users.update_last_signed_in(user, %{provider: :test})
-      assert user.last_signed_in_method == "test"
+    test "allows creating a user without password", %{subject: subject} do
+      email = UsersFixtures.user_attrs().email
+      attrs = %{email: email, password: nil, password_confirmation: nil}
+      assert {:ok, user} = create_user(:unprivileged, attrs, subject)
+      assert is_nil(user.password_hash)
 
-      {:ok, user} = Users.update_last_signed_in(user, %{provider: :another_test})
-      assert user.last_signed_in_method == "another_test"
+      email = UsersFixtures.user_attrs().email
+      attrs = %{email: email, password: "", password_confirmation: ""}
+      assert {:ok, user} = create_user(:unprivileged, attrs, subject)
+      assert is_nil(user.password_hash)
     end
-  end
 
-  describe "delete_user/1" do
-    setup :create_user
+    test "trims email", %{subject: subject} do
+      attrs = UsersFixtures.user_attrs()
+      updated_attrs = Map.put(attrs, :email, " #{attrs.email} ")
 
-    test "raises Ecto.NoResultsError when a deleted user is fetched", %{user: user} do
-      Users.delete_user(user)
+      assert {:ok, user} = create_user(:unprivileged, updated_attrs, subject)
 
-      assert_raise(Ecto.NoResultsError, fn ->
-        Users.get_user!(user.id)
-      end)
+      assert user.email == attrs.email
+    end
+
+    test "returns error when subject can not create users", %{subject: subject} do
+      subject = SubjectFixtures.remove_permissions(subject)
+
+      assert create_user(:foo, %{}, subject) ==
+               {:error,
+                {:unauthorized,
+                 [missing_permissions: [Users.Authorizer.manage_users_permission()]]}}
     end
   end
 
   describe "change_user/1" do
-    setup :create_user
-
-    test "returns changeset", %{user: user} do
-      assert %Ecto.Changeset{} = Users.change_user(user)
-    end
-  end
-
-  describe "new_user/0" do
     test "returns changeset" do
-      assert %Ecto.Changeset{} = Users.new_user()
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert %Ecto.Changeset{} = change_user(user)
     end
   end
 
-  describe "enable_vpn_connection/2" do
-    import Ecto.Changeset
+  describe "update_user/3" do
+    setup do
+      unprivileged_user = UsersFixtures.create_user_with_role(:unprivileged)
 
-    setup :create_user
+      admin_user = UsersFixtures.create_user_with_role(:admin)
+      admin_subject = SubjectFixtures.create_subject(admin_user)
 
-    setup %{user: user} do
-      user = user |> change |> put_change(:disabled_at, DateTime.utc_now()) |> Repo.update!()
-      {:ok, user: user}
+      %{
+        unprivileged_user: unprivileged_user,
+        admin_user: admin_user,
+        subject: admin_subject
+      }
     end
 
-    @tag role: :unprivileged
-    test "enable via OIDC", %{user: user} do
-      Users.enable_vpn_connection(user, %{provider: :oidc})
-
-      user = Repo.reload(user)
-
-      assert %{disabled_at: nil} = user
+    test "noop on empty attrs", %{
+      unprivileged_user: user,
+      subject: subject
+    } do
+      assert {:ok, _user} = update_user(user, %{}, subject)
     end
 
-    @tag role: :unprivileged
-    test "no change via password", %{user: user} do
-      Users.enable_vpn_connection(user, %{provider: :identity})
+    test "allows admin to change user password", %{subject: subject} do
+      user = UsersFixtures.create_user_with_role(:admin)
 
-      user = Repo.reload(user)
+      attrs =
+        UsersFixtures.user_attrs()
+        |> Map.take([:password, :password_confirmation])
 
-      assert user.disabled_at
+      assert {:ok, updated_user} = update_user(user, attrs, subject)
+
+      assert updated_user.password_hash != user.password_hash
+    end
+
+    test "allows admin to change user email", %{unprivileged_user: user, subject: subject} do
+      attrs =
+        UsersFixtures.user_attrs()
+        |> Map.take([:email])
+
+      assert {:ok, updated_user} = update_user(user, attrs, subject)
+
+      assert updated_user.email == attrs.email
+      assert updated_user.email != user.email
+    end
+
+    test "allows admin to change both email and password", %{
+      unprivileged_user: user,
+      subject: subject
+    } do
+      attrs = UsersFixtures.user_attrs()
+
+      assert {:ok, updated_user} = update_user(user, attrs, subject)
+
+      assert updated_user.password_hash != user.password_hash
+      assert updated_user.email != user.email
+    end
+
+    test "allows admin to change user role", %{subject: subject} do
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert {:ok, %{role: :unprivileged}} = update_user(user, %{role: :unprivileged}, subject)
+      assert {:ok, %{role: :admin}} = update_user(user, %{role: :admin}, subject)
+    end
+
+    test "doesn't allow admin to change own role", %{admin_user: user, subject: subject} do
+      assert {:error, changeset} = update_user(user, %{role: :unprivileged}, subject)
+      assert "You cannot change your own role" in errors_on(changeset).role
+    end
+
+    test "raises on invalid role", %{subject: subject} do
+      user = UsersFixtures.create_user_with_role(:admin)
+
+      assert {:error, changeset} = update_user(user, %{role: :foo}, subject)
+      assert errors_on(changeset) == %{role: ["is invalid"]}
+    end
+
+    test "does not allow to clear the password", %{subject: subject} do
+      password = "password1234"
+      user = UsersFixtures.create_user_with_role(:admin, %{password: password})
+
+      attrs = %{
+        "password" => nil,
+        "password_hash" => nil
+      }
+
+      assert {:ok, updated_user} = update_user(user, attrs, subject)
+      assert updated_user.password_hash == user.password_hash
+
+      attrs = %{
+        "password" => "",
+        "password_hash" => ""
+      }
+
+      assert {:ok, updated_user} = update_user(user, attrs, subject)
+      assert updated_user.password_hash == user.password_hash
+    end
+
+    test "returns error when subject can not update users", %{
+      unprivileged_user: user,
+      subject: subject
+    } do
+      subject = SubjectFixtures.remove_permissions(subject)
+
+      assert update_user(user, %{}, subject) ==
+               {:error,
+                {:unauthorized,
+                 [
+                   missing_permissions: [
+                     Users.Authorizer.manage_users_permission()
+                   ]
+                 ]}}
+    end
+  end
+
+  describe "update_self/2" do
+    setup do
+      user = UsersFixtures.create_user_with_role(:unprivileged)
+      subject = SubjectFixtures.create_subject(user)
+
+      %{
+        user: user,
+        subject: subject
+      }
+    end
+
+    test "noop on empty attrs", %{
+      subject: subject
+    } do
+      assert {:ok, _user} = update_self(%{}, subject)
+    end
+
+    test "does not allow to clear the password" do
+      password = "password1234"
+      user = UsersFixtures.create_user_with_role(:admin, %{password: password})
+      subject = SubjectFixtures.create_subject(user)
+
+      attrs = %{
+        "password" => nil,
+        "password_hash" => nil
+      }
+
+      assert {:ok, updated_user} = update_self(attrs, subject)
+      assert updated_user.password_hash == user.password_hash
+
+      attrs = %{
+        "password" => "",
+        "password_hash" => ""
+      }
+
+      assert {:ok, updated_user} = update_self(attrs, subject)
+      assert updated_user.password_hash == user.password_hash
+    end
+
+    test "allows unprivileged user to change own password", %{
+      user: user,
+      subject: subject
+    } do
+      attrs =
+        UsersFixtures.user_attrs()
+        |> Map.take([:password, :password_confirmation])
+
+      assert {:ok, updated_user} = update_self(attrs, subject)
+
+      assert updated_user.password_hash != user.password_hash
+    end
+
+    test "does not allow unprivileged user to change own email", %{
+      user: user,
+      subject: subject
+    } do
+      attrs =
+        UsersFixtures.user_attrs()
+        |> Map.take([:email])
+
+      assert {:ok, updated_user} = update_self(attrs, subject)
+
+      assert updated_user.email != attrs.email
+      assert updated_user.email == user.email
+    end
+
+    test "returns error when subject can not update own profile", %{
+      subject: subject
+    } do
+      subject = SubjectFixtures.remove_permissions(subject)
+
+      assert update_self(%{}, subject) ==
+               {:error,
+                {:unauthorized,
+                 [
+                   missing_permissions: [
+                     Users.Authorizer.edit_own_profile_permission()
+                   ]
+                 ]}}
+    end
+  end
+
+  describe "delete_user/1" do
+    test "deletes a user" do
+      user = UsersFixtures.create_user_with_role(:admin)
+      UsersFixtures.create_user_with_role(:admin)
+      subject = SubjectFixtures.create_subject(user)
+
+      assert {:ok, _user} = delete_user(user, subject)
+      assert is_nil(Repo.get(Users.User, user.id))
+    end
+
+    test "returns error when subject can not delete users" do
+      user = UsersFixtures.create_user_with_role(:admin)
+
+      subject =
+        user
+        |> SubjectFixtures.create_subject()
+        |> SubjectFixtures.remove_permissions()
+
+      assert delete_user(user, subject) ==
+               {:error,
+                {:unauthorized,
+                 [missing_permissions: [Users.Authorizer.manage_users_permission()]]}}
     end
   end
 
   describe "setting_projection/1" do
-    setup [:create_rule_with_user_and_device]
-
-    test "projects expected fields with user", %{user: user} do
-      assert user.id == Users.setting_projection(user)
+    test "projects expected fields with user" do
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert user.id == setting_projection(user)
     end
 
-    test "projects expected fields with user map", %{user: user} do
+    test "projects expected fields with user map" do
+      user = UsersFixtures.create_user_with_role(:admin)
       user_map = Map.from_struct(user)
-      assert user.id == Users.setting_projection(user_map)
+      assert user.id == setting_projection(user_map)
     end
   end
 
   describe "as_settings/0" do
-    setup [:create_rules]
+    test "returns list of user-id maps" do
+      assert as_settings() == MapSet.new([])
 
-    test "Maps rules to projections", %{users: users} do
-      expected_users = Enum.map(users, &Users.setting_projection/1) |> MapSet.new()
+      expected_settings =
+        [
+          UsersFixtures.create_user_with_role(:admin),
+          UsersFixtures.create_user_with_role(:admin)
+        ]
+        |> Enum.map(&setting_projection/1)
+        |> MapSet.new()
 
-      assert Users.as_settings() == expected_users
+      assert as_settings() == expected_settings
+    end
+  end
+
+  describe "update_last_signed_in/2" do
+    test "updates last_signed_in_* fields" do
+      user = UsersFixtures.create_user_with_role(:admin)
+
+      assert {:ok, user} = update_last_signed_in(user, %{provider: :test})
+      assert user.last_signed_in_method == "test"
+
+      assert {:ok, user} = update_last_signed_in(user, %{provider: :another_test})
+      assert user.last_signed_in_method == "another_test"
+    end
+  end
+
+  describe "vpn_session_expires_at/1" do
+    test "returns expiration datetime of VPN session" do
+      now = DateTime.utc_now()
+      Config.put_config!(:vpn_session_duration, 30)
+
+      user =
+        UsersFixtures.create_user_with_role(:admin)
+        |> change(%{last_signed_in_at: now})
+        |> Repo.update!()
+
+      assert DateTime.diff(vpn_session_expires_at(user), now, :second) in 28..32
+    end
+  end
+
+  describe "vpn_session_expired?/1" do
+    test "returns false when user did not sign in" do
+      Config.put_config!(:vpn_session_duration, 30)
+      user = UsersFixtures.create_user_with_role(:admin)
+      assert vpn_session_expired?(user) == false
+    end
+
+    test "returns false when VPN session is not expired" do
+      Config.put_config!(:vpn_session_duration, 30)
+      user = UsersFixtures.create_user_with_role(:admin)
+
+      user =
+        user
+        |> change(%{last_signed_in_at: DateTime.utc_now()})
+        |> Repo.update!()
+
+      assert vpn_session_expired?(user) == false
+    end
+
+    test "returns true when VPN session is expired" do
+      Config.put_config!(:vpn_session_duration, 30)
+      user = UsersFixtures.create_user_with_role(:admin)
+
+      user =
+        user
+        |> change(%{last_signed_in_at: DateTime.utc_now() |> DateTime.add(-31, :second)})
+        |> Repo.update!()
+
+      assert vpn_session_expired?(user) == true
+    end
+
+    test "returns false when VPN session never expires" do
+      Config.put_config!(:vpn_session_duration, 0)
+      user = UsersFixtures.create_user_with_role(:admin)
+
+      user =
+        user
+        |> change(%{last_signed_in_at: ~U[1990-01-01 01:01:01.000001Z]})
+        |> Repo.update!()
+
+      assert vpn_session_expired?(user) == false
     end
   end
 end

@@ -5,7 +5,7 @@ defmodule FzHttpWeb.LiveHelpers do
   https://bernheisel.com/blog/phoenix-liveview-and-views
   """
   use Phoenix.Component
-  alias FzHttp.{Sites, Users}
+  alias FzHttp.{Config, Users}
 
   def live_modal(component, opts) do
     path = Keyword.fetch!(opts, :return_to)
@@ -36,19 +36,19 @@ defmodule FzHttpWeb.LiveHelpers do
   end
 
   def admin_email do
-    Application.fetch_env!(:fz_http, :admin_email)
+    FzHttp.Config.fetch_env!(:fz_http, :admin_email)
   end
 
   def vpn_sessions_expire? do
-    Sites.vpn_sessions_expire?()
+    Config.vpn_sessions_expire?()
   end
 
   def vpn_expires_at(user) do
-    Users.vpn_session_expires_at(user, Sites.vpn_duration())
+    Users.vpn_session_expires_at(user)
   end
 
   def vpn_expired?(user) do
-    Users.vpn_session_expired?(user, Sites.vpn_duration())
+    Users.vpn_session_expired?(user)
   end
 
   defp status_digit(response_code) when is_integer(response_code) do
@@ -62,5 +62,20 @@ defmodule FzHttpWeb.LiveHelpers do
 
   defp http_success?(_) do
     false
+  end
+
+  def do_not_render_changeset_errors(%Ecto.Changeset{} = changeset) do
+    %{changeset | action: nil}
+  end
+
+  def render_changeset_errors(%Ecto.Changeset{} = changeset) do
+    %{changeset | action: :validate}
+  end
+
+  def list_value(form, field) do
+    case Phoenix.HTML.Form.input_value(form, field) do
+      value when is_list(value) -> Enum.join(value, ", ")
+      value -> value
+    end
   end
 end

@@ -1,6 +1,6 @@
 defmodule FzHttpWeb.UserLive.IndexTest do
   use FzHttpWeb.ConnCase, async: true
-
+  alias FzHttp.SubjectFixtures
   alias FzHttp.Users
 
   describe "authenticated user list" do
@@ -20,14 +20,17 @@ defmodule FzHttpWeb.UserLive.IndexTest do
     end
 
     test "includes device_counts in the list", %{
+      admin_user: user,
       admin_conn: conn,
       devices: _devices,
       users: _users
     } do
       path = ~p"/users"
       {:ok, _view, html} = live(conn, path)
+      subject = SubjectFixtures.create_subject(user)
+      {:ok, users} = Users.list_users(subject, hydrate: [:device_count])
 
-      for user <- Users.list_users(:with_device_counts) do
+      for user <- users do
         assert html =~ "<td id=\"user-#{user.id}-device-count\">#{user.device_count}</td>"
       end
     end
@@ -84,7 +87,7 @@ defmodule FzHttpWeb.UserLive.IndexTest do
 
       {new_path, flash} = assert_redirect(view)
       assert flash["info"] == "User created successfully."
-      user = Users.get_user!(email: @valid_user_attrs["user"]["email"])
+      assert {:ok, user} = Users.fetch_user_by_email(@valid_user_attrs["user"]["email"])
       assert new_path == ~p"/users/#{user}"
     end
 
@@ -97,7 +100,7 @@ defmodule FzHttpWeb.UserLive.IndexTest do
         |> element("form#user-form")
         |> render_submit(@invalid_user_attrs)
 
-      assert new_view =~ "has invalid format"
+      assert new_view =~ "is invalid email address"
       assert new_view =~ "should be at least 12 character(s)"
     end
   end

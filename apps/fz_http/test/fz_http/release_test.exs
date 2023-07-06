@@ -3,10 +3,10 @@ defmodule FzHttp.ReleaseTest do
   XXX: Write more meaningful tests for this module.
   Perhaps the best way to test this module is through functional tests.
   """
-
   use FzHttp.DataCase, async: true
-
-  alias FzHttp.{Release, Users, Users.User}
+  alias FzHttp.{ApiTokens, Users}
+  alias FzHttp.Release
+  alias FzHttp.UsersFixtures
 
   describe "migrate/0" do
     test "function runs without error" do
@@ -14,19 +14,11 @@ defmodule FzHttp.ReleaseTest do
     end
   end
 
-  describe "rollback/2" do
-    test "calls function" do
-      for repo <- Release.repos() do
-        assert Release.rollback(repo, "0")
-      end
-    end
-  end
-
   describe "create_admin_user/0" do
     test "creates admin when none exists" do
       Release.create_admin_user()
-      user = Users.get_user!(email: Application.fetch_env!(:fz_http, :admin_email))
-      assert %User{} = user
+      email = FzHttp.Config.fetch_env!(:fz_http, :admin_email)
+      assert {:ok, %Users.User{}} = Users.fetch_user_by_email(email)
     end
 
     test "reset admin password when user exists" do
@@ -38,12 +30,24 @@ defmodule FzHttp.ReleaseTest do
     end
   end
 
-  describe "change_password/2" do
-    setup [:create_user]
+  describe "create_api_token/1" do
+    test "creates api_token_token for default admin user" do
+      admin_user =
+        UsersFixtures.create_user_with_role(:admin, %{
+          email: FzHttp.Config.fetch_env!(:fz_http, :admin_email)
+        })
 
-    test "changes password", %{user: user} do
+      assert :ok = Release.create_api_token()
+      assert ApiTokens.count_by_user_id(admin_user.id) == 1
+    end
+  end
+
+  describe "change_password/2" do
+    test "changes password" do
+      user = UsersFixtures.create_user_with_role(:unprivileged)
+
       Release.change_password(user.email, "this password should be different")
-      new_user = Users.get_user!(email: user.email)
+      assert {:ok, new_user} = Users.fetch_user_by_email(user.email)
 
       assert new_user.password_hash != user.password_hash
     end

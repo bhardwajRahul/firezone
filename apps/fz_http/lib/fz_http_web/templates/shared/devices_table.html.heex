@@ -5,7 +5,8 @@
       <%= if @show_user do %>
         <th>User</th>
       <% end %>
-      <th>WireGuard IP</th>
+      <th>Tunnel IPv4</th>
+      <th>Tunnel IPv6</th>
       <th>Remote IP</th>
       <th>Latest Handshake</th>
       <th>Transfer</th>
@@ -29,11 +30,8 @@
             ) %>
           </td>
         <% end %>
-        <td class="code">
-          <%= device.ipv4 %>
-          <br />
-          <%= device.ipv6 %>
-        </td>
+        <td class="code"><%= device.ipv4 %></td>
+        <td class="code"><%= device.ipv6 %></td>
         <td class="code">
           <%= device.remote_ip %>
         </td>
@@ -45,8 +43,8 @@
           …
         </td>
         <td class="code">
-          <%= FzCommon.FzInteger.to_human_bytes(device.rx_bytes) %> received <br />
-          <%= FzCommon.FzInteger.to_human_bytes(device.tx_bytes) %> sent
+          <%= to_human_bytes(device.rx_bytes) %> received <br />
+          <%= to_human_bytes(device.tx_bytes) %> sent
         </td>
         <td class="code"><%= device.public_key %></td>
         <td

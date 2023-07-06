@@ -1,7 +1,8 @@
 defmodule FzHttp.TelemetryTest do
   use FzHttp.DataCase, async: true
-
+  import FzHttp.TestHelpers
   alias FzHttp.Telemetry
+  alias FzHttp.MFAFixtures
 
   describe "user" do
     setup :create_user
@@ -14,12 +15,12 @@ defmodule FzHttp.TelemetryTest do
 
     test "count mfa", %{user: user} do
       {:ok, [user: other_user]} = create_user(%{})
-      {:ok, _method} = create_method(user, type: :totp)
-      {:ok, _method} = create_method(other_user, type: :portable)
+      MFAFixtures.create_totp_method(user: user)
+      MFAFixtures.create_totp_method(user: other_user)
       ping_data = Telemetry.ping_data()
 
       assert ping_data[:users_with_mfa] == 2
-      assert ping_data[:users_with_mfa_totp] == 1
+      assert ping_data[:users_with_mfa_totp] == 2
     end
   end
 
@@ -40,65 +41,73 @@ defmodule FzHttp.TelemetryTest do
   end
 
   describe "auth" do
-    setup context do
-      if context[:config] do
-        {key, value} = context[:config]
-        restore_env(key, value, &on_exit/1)
-      else
-        context
-      end
-    end
-
     test "count openid providers" do
+      FzHttp.ConfigFixtures.start_openid_providers([
+        "google",
+        "okta",
+        "auth0",
+        "azure",
+        "onelogin",
+        "keycloak",
+        "vault"
+      ])
+
       ping_data = Telemetry.ping_data()
 
       assert ping_data[:openid_providers] == 7
     end
 
-    @tag config: {:disable_vpn_on_oidc_error, true}
     test "disable vpn on oidc error enabled" do
+      FzHttp.Config.put_config!(:disable_vpn_on_oidc_error, true)
+
       ping_data = Telemetry.ping_data()
 
       assert ping_data[:disable_vpn_on_oidc_error]
     end
 
-    @tag config: {:disable_vpn_on_oidc_error, false}
     test "disable vpn on oidc error disabled" do
+      FzHttp.Config.put_config!(:disable_vpn_on_oidc_error, false)
+
       ping_data = Telemetry.ping_data()
 
       refute ping_data[:disable_vpn_on_oidc_error]
     end
 
-    @tag config: {:local_auth_enabled, true}
     test "local authentication enabled" do
+      FzHttp.Config.put_config!(:local_auth_enabled, true)
+
       ping_data = Telemetry.ping_data()
 
       assert ping_data[:local_authentication]
     end
 
-    @tag config: {:local_auth_enabled, false}
     test "local authentication disabled" do
+      FzHttp.Config.put_config!(:local_auth_enabled, false)
+
       ping_data = Telemetry.ping_data()
 
       refute ping_data[:local_authentication]
     end
 
-    @tag config: {:allow_unprivileged_device_management, true}
     test "unprivileged device management enabled" do
+      FzHttp.Config.put_config!(:allow_unprivileged_device_management, true)
+
       ping_data = Telemetry.ping_data()
 
       assert ping_data[:unprivileged_device_management]
     end
 
-    @tag config: {:allow_unprivileged_device_configuration, true}
     test "unprivileged device configuration enabled" do
+      FzHttp.Config.put_config!(:allow_unprivileged_device_configuration, true)
+
       ping_data = Telemetry.ping_data()
 
       assert ping_data[:unprivileged_device_configuration]
     end
 
-    @tag config: {:allow_unprivileged_device_configuration, false}
     test "unprivileged device configuration disabled" do
+      FzHttp.Config.put_config!(:allow_unprivileged_device_configuration, false)
+
       ping_data = Telemetry.ping_data()
 
       refute ping_data[:unprivileged_device_configuration]
@@ -106,33 +115,33 @@ defmodule FzHttp.TelemetryTest do
   end
 
   describe "database" do
-    setup context do
-      restore_env(FzHttp.Repo, context[:db_config], &on_exit/1)
-    end
-
-    @tag db_config: [hostname: "localhost"]
     test "local hostname" do
+      FzHttp.Config.put_env_override(:fz_http, FzHttp.Repo, hostname: "localhost")
+
       ping_data = Telemetry.ping_data()
 
       refute ping_data[:external_database]
     end
 
-    @tag db_config: [url: "postgres://127.0.0.1"]
     test "local url" do
+      FzHttp.Config.put_env_override(:fz_http, FzHttp.Repo, url: "postgres://127.0.0.1")
+
       ping_data = Telemetry.ping_data()
 
       refute ping_data[:external_database]
     end
 
-    @tag db_config: [hostname: "firezone.dev"]
     test "external hostname" do
+      FzHttp.Config.put_env_override(:fz_http, FzHttp.Repo, hostname: "firezone.dev")
+
       ping_data = Telemetry.ping_data()
 
       assert ping_data[:external_database]
     end
 
-    @tag db_config: [url: "postgres://firezone.dev"]
     test "external url" do
+      FzHttp.Config.put_env_override(:fz_http, FzHttp.Repo, url: "postgres://firezone.dev")
+
       ping_data = Telemetry.ping_data()
 
       assert ping_data[:external_database]
@@ -140,19 +149,23 @@ defmodule FzHttp.TelemetryTest do
   end
 
   describe "email" do
-    setup context do
-      restore_env(FzHttpWeb.Mailer, [from_email: context[:from_email]], &on_exit/1)
-    end
-
-    @tag from_email: "test@firezone.dev"
     test "outbound set" do
+      FzHttp.Config.put_env_override(:fz_http, FzHttpWeb.Mailer,
+        adapter: Swoosh.Adapters.NoopAdapter,
+        from_email: "test@firezone.dev"
+      )
+
       ping_data = Telemetry.ping_data()
 
       assert ping_data[:outbound_email]
     end
 
-    @tag from_email: nil
     test "outbound unset" do
+      FzHttp.Config.put_env_override(:fz_http, FzHttpWeb.Mailer,
+        adapter: SwooshAdapters.NoopAdapter,
+        from_email: nil
+      )
+
       ping_data = Telemetry.ping_data()
 
       refute ping_data[:outbound_email]

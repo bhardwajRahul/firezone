@@ -17,7 +17,7 @@ capture () {
               \"distinct_id\": \"$telemetry_id\"
             }
           }" \
-          https://telemetry.firez.one/capture/ > /dev/null
+          https://t.firez.one/capture/ > /dev/null
       fi
     fi
   fi
@@ -46,5 +46,15 @@ fi
 
 echo $bold
 echo "Please see our upgrade guide for any version notes that apply:"
-echo "https://docs.firezone.dev/administer/upgrade"
+echo
+echo "=> https://docs.firezone.dev/administer/upgrade/?utm_source=product"
+echo
+echo
+echo "Heads up! Firezone 0.7.x will be the last release to offer Omnibus packages."
+echo "We *highly* recommend migrating your Omnibus install to Docker ASAP to avoid"
+echo "unexpected issues with future releases."
+echo
+echo "Read more about the transition in our migration guide:"
+echo
+echo "=> https://firezone.dev/docs/administer/migrate/?utm_source=product"
 echo $normal

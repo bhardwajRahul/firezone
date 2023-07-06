@@ -4,10 +4,11 @@
     return_to: ~p"/user_devices",
     title: "Add Device",
     current_user: @current_user,
-    target_user_id: @current_user.id,
+    user: @current_user,
     id: "create-device-component",
     form: "create-device",
-    button_text: "Generate Configuration"
+    button_text: "Generate Configuration",
+    subject: @subject
   ) %>
 <% end %>
 
@@ -29,12 +30,13 @@
   </div>
 
   <div class="block">
-    <%= if length(@devices) > 0 do %>
+    <%= unless Enum.empty?(@devices) do %>
       <table class="table is-bordered is-hoverable is-striped is-fullwidth">
         <thead>
           <tr>
             <th>Name</th>
-            <th>Assigned Device IP</th>
+            <th>Tunnel IPv4</th>
+            <th>Tunnel IPv6</th>
             <th>Public key</th>
             <th>Created</th>
           </tr>
@@ -47,10 +49,8 @@
                   <%= device.name %>
                 </.link>
               </td>
-              <td class="code">
-                <span><%= device.ipv4 %></span>
-                <span><%= device.ipv6 %></span>
-              </td>
+              <td class="code"><%= device.ipv4 %></td>
+              <td class="code"><%= device.ipv6 %></td>
               <td class="code"><%= device.public_key %></td>
               <td
                 id={"device-#{device.id}-inserted-at"}
@@ -70,7 +70,7 @@
     <% end %>
   </div>
 
-  <%= if FzHttpWeb.DeviceView.can_manage_devices?(@current_user) do %>
+  <%= if FzHttp.Devices.authorize_user_device_management(@current_user.id, @subject) == :ok do %>
     <div class="block">
       <.link replace={true} patch={~p"/user_devices/new"} class="button">
         Add Device

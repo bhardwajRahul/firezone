@@ -25,7 +25,7 @@ defmodule FzHttpWeb do
       import FzHttpWeb.Gettext
       import Phoenix.LiveView.Controller
       import FzHttpWeb.ControllerHelpers
-      alias FzHttp.Configurations, as: Conf
+      import FzHttpWeb.DocHelpers
 
       unquote(verified_routes())
     end
@@ -52,10 +52,6 @@ defmodule FzHttpWeb do
       import FzHttpWeb.LiveHelpers
 
       unquote(verified_routes())
-
-      def render_common(template, assigns \\ []) do
-        render(FzHttpWeb.CommonView, template, assigns)
-      end
     end
   end
 
@@ -63,7 +59,7 @@ defmodule FzHttpWeb do
     quote do
       use Phoenix.LiveView, layout: {FzHttpWeb.LayoutView, :live}
       import FzHttpWeb.LiveHelpers
-      alias FzHttp.Configurations, as: Conf
+
       alias Phoenix.LiveView.JS
 
       unquote(view_helpers())
@@ -72,9 +68,9 @@ defmodule FzHttpWeb do
 
   def live_view_without_layout do
     quote do
-      use Phoenix.LiveView, layout: nil
+      use Phoenix.LiveView
       import FzHttpWeb.LiveHelpers
-      alias FzHttp.Configurations, as: Conf
+
       alias Phoenix.LiveView.JS
 
       unquote(view_helpers())
@@ -87,7 +83,6 @@ defmodule FzHttpWeb do
       use Phoenix.LiveComponent
       use Phoenix.Component, global_prefixes: ~w(x-)
       import FzHttpWeb.LiveHelpers
-      alias FzHttp.Configurations, as: Conf
 
       unquote(view_helpers())
     end
@@ -136,7 +131,7 @@ defmodule FzHttpWeb do
     end
   end
 
-  def static_paths, do: ~w(dist fonts images browserconfig.xml robots.txt)
+  def static_paths, do: ~w(dist fonts images uploads robots.txt)
 
   def verified_routes do
     quote do

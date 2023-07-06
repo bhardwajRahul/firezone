@@ -8,8 +8,7 @@ defmodule FzHttpWeb.SettingLive.Unprivileged.Account do
   """
   use FzHttpWeb, :live_view
 
-  alias FzHttp.Configurations, as: Conf
-  alias FzHttp.{MFA, Users}
+  alias FzHttp.{Auth.MFA, Users}
   alias FzHttpWeb.{Endpoint, Presence}
 
   @live_sessions_topic "notification:session"
@@ -20,17 +19,21 @@ defmodule FzHttpWeb.SettingLive.Unprivileged.Account do
   def mount(_params, _session, socket) do
     Endpoint.subscribe(@live_sessions_topic)
 
-    {:ok,
-     socket
-     |> assign(:local_auth_enabled, Conf.get!(:local_auth_enabled))
-     |> assign(:changeset, Users.change_user(socket.assigns.current_user))
-     |> assign(:methods, MFA.list_methods(socket.assigns.current_user))
-     |> assign(:page_title, @page_title)
-     |> assign(:page_subtitle, @page_subtitle)
-     |> assign(
-       :metas,
-       get_metas(Presence.list(@live_sessions_topic), socket.assigns.current_user.id)
-     )}
+    {:ok, methods} = MFA.list_methods_for_user(socket.assigns.current_user)
+
+    socket =
+      socket
+      |> assign(:local_auth_enabled, FzHttp.Config.fetch_config!(:local_auth_enabled))
+      |> assign(:changeset, Users.change_user(socket.assigns.current_user))
+      |> assign(:methods, methods)
+      |> assign(:page_title, @page_title)
+      |> assign(:page_subtitle, @page_subtitle)
+      |> assign(
+        :metas,
+        get_metas(Presence.list(@live_sessions_topic), socket.assigns.current_user.id)
+      )
+
+    {:ok, socket}
   end
 
   @impl Phoenix.LiveView
@@ -40,11 +43,17 @@ defmodule FzHttpWeb.SettingLive.Unprivileged.Account do
 
   @impl Phoenix.LiveView
   def handle_event("delete_authenticator", %{"id" => id}, socket) do
-    {:ok, _deleted} = id |> MFA.get_method!() |> MFA.delete_method()
+    with {:ok, _method} <- MFA.delete_method_by_id(id, socket.assigns.current_user) do
+      {:ok, methods} = MFA.list_methods_for_user(socket.assigns.current_user)
+      {:noreply, assign(socket, :methods, methods)}
+    else
+      {:error, :not_found} ->
+        {:ok, methods} = MFA.list_methods_for_user(socket.assigns.current_user)
+        {:noreply, assign(socket, :methods, methods)}
 
-    {:noreply,
-     socket
-     |> assign(:methods, MFA.list_methods(socket.assigns.current_user))}
+      false ->
+        {:noreply, socket}
+    end
   end
 
   @impl Phoenix.LiveView
@@ -61,6 +70,6 @@ defmodule FzHttpWeb.SettingLive.Unprivileged.Account do
   end
 
   defp get_metas(presences, user_id) do
-    get_in(presences, [to_string(user_id), :metas]) || []
+    get_in(presences, [user_id, :metas]) || []
   end
 end

@@ -15,28 +15,32 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
         with:
-          node-version: '16'
-          cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
+          node-version: '18'
+          cache: 'yarn'
+          cache-dependency-path: |
+            apps/fz_http/assets/yarn.lock
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '2.7'
-      - uses: actions/setup-python@v2
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      - uses: erlef/setup-beam@v1
+      - id: setup-beam
+        uses: erlef/setup-beam@v1
         with:
           otp-version: '25'
           elixir-version: '1.14'
-      - uses: actions/cache@v3.0.11
-        name: Setup Elixir cache
+      - uses: actions/cache@v3
+        name: Elixir Deps Cache
+        env:
+          cache-name: cache-elixir-deps
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-otp-25-${{ hashFiles('**/mix.lock') }}
+          # XXX: We've purposefully omitted caching the _build directory here because we
+          # force-recompile in the pre-commit run below in order to catch any compilation warnings.
+          path: deps
+          key: ${{ github.workflow }}-${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-otp-25-
+            ${{ github.workflow }}-${{ runner.os }}-${{ env.cache-name }}-
       - uses: actions/cache@v3.0.11
         name: Setup ruby cache
         with:
@@ -67,17 +71,15 @@ jobs:
         id: plt_cache
         with:
           key: |
-            ${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-plt
+            ${{ runner.os }}-${{ steps.setup-beam.outputs.elixir-version }}-${{ steps.setup-beam.outputs.otp-version }}-plt
           restore-keys: |
-            ${{ runner.os }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-plt
+            ${{ runner.os }}-${{ steps.setup-beam.outputs.elixir-version }}-${{ steps.setup-beam.outputs.otp-version }}-plt
           path: |
             priv/plts
       # Create PLTs if no cache was found
       - name: Create PLTs
         if: steps.plt_cache.outputs.cache-hit != 'true'
         run: mix dialyzer --plt
-      - name: Install node modules
-        run: npm ci --prefix docs/
       - name: Run pre-commit
         run: |
           pre-commit install

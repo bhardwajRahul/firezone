@@ -4,13 +4,15 @@ defmodule FzHttpWeb.Endpoint do
   alias FzHttpWeb.HeaderHelpers
   alias FzHttpWeb.Session
 
+  plug FzHttpWeb.Plug.PathPrefix
+
   if Application.compile_env(:fz_http, :sql_sandbox) do
     plug Phoenix.Ecto.SQL.Sandbox
   end
 
   socket "/socket", FzHttpWeb.UserSocket,
     websocket: [
-      connect_info: [:peer_data, :x_headers, :uri],
+      connect_info: [:user_agent, :peer_data, :x_headers, :uri],
       # XXX: channel token should prevent CSWH but double check
       check_origin: false
     ],
@@ -19,6 +21,7 @@ defmodule FzHttpWeb.Endpoint do
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [
       connect_info: [
+        :user_agent,
         :peer_data,
         :x_headers,
         :uri,

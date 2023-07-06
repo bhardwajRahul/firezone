@@ -13,31 +13,16 @@ defmodule FzHttp.DataCase do
   by setting `use FzHttp.DataCase, async: true`, although
   this option is not recommended for other databases.
   """
-
   use ExUnit.CaseTemplate
-
-  alias Ecto.Adapters.SQL.Sandbox
+  use FzHttp.CaseTemplate
 
   using do
     quote do
-      alias FzHttp.Repo
-
       import Ecto
       import Ecto.Changeset
-      import Ecto.Query
       import FzHttp.DataCase
-      import FzHttp.TestHelpers
+      alias FzHttp.Repo
     end
-  end
-
-  setup tags do
-    :ok = Sandbox.checkout(FzHttp.Repo)
-
-    unless tags[:async] do
-      Sandbox.mode(FzHttp.Repo, {:shared, self()})
-    end
-
-    :ok
   end
 
   @doc """

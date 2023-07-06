@@ -3,31 +3,36 @@ defmodule FzHttpWeb.SettingLive.Security do
   Manages security LiveView
   """
   use FzHttpWeb, :live_view
-
-  import Ecto.Changeset
-  import FzCommon.FzCrypto, only: [rand_string: 1]
-
-  alias FzHttp.Configurations, as: Conf
-  alias FzHttp.{Sites, Sites.Site}
+  import FzHttp.Crypto, only: [rand_string: 1]
+  alias FzHttp.Config
 
   @page_title "Security Settings"
   @page_subtitle "Configure security-related settings."
 
+  @hour 3_600
+  @day 24 * @hour
+
+  @configs ~w[
+    local_auth_enabled
+    disable_vpn_on_oidc_error
+    allow_unprivileged_device_management
+    allow_unprivileged_device_configuration
+    vpn_session_duration
+    openid_connect_providers
+    saml_identity_providers
+  ]a
+
   @impl Phoenix.LiveView
   def mount(_params, _session, socket) do
-    config_changeset = Conf.change_configuration()
+    socket =
+      socket
+      |> assign(:page_title, @page_title)
+      |> assign(:page_subtitle, @page_subtitle)
+      |> assign(:form_changed, false)
+      |> assign(:configuration_changeset, configuration_changeset())
+      |> assign(:configs, FzHttp.Config.fetch_source_and_configs!(@configs))
 
-    {:ok,
-     socket
-     |> assign(:form_changed, false)
-     |> assign(:session_duration_options, session_duration_options())
-     |> assign(:site_changeset, site_changeset())
-     |> assign(:config_changeset, config_changeset)
-     |> assign(:oidc_configs, config_changeset.data.openid_connect_providers || %{})
-     |> assign(:saml_configs, config_changeset.data.saml_identity_providers || %{})
-     |> assign(:field_titles, field_titles(config_changeset))
-     |> assign(:page_subtitle, @page_subtitle)
-     |> assign(:page_title, @page_title)}
+    {:ok, socket}
   end
 
   @impl Phoenix.LiveView
@@ -36,96 +41,105 @@ defmodule FzHttpWeb.SettingLive.Security do
   end
 
   @impl Phoenix.LiveView
-  def handle_event("change", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:form_changed, true)}
+  def handle_event("change", %{"configuration" => attrs}, socket) do
+    changeset = configuration_changeset(attrs)
+    {:noreply, assign(socket, :form_changed, changeset.changes != %{})}
   end
 
   @impl Phoenix.LiveView
-  def handle_event(
-        "save_site",
-        %{"site" => %{"vpn_session_duration" => vpn_session_duration}},
-        socket
-      ) do
-    site = Sites.get_site!()
+  def handle_event("save_configuration", %{"configuration" => attrs}, socket) do
+    configuration = Config.fetch_db_config!()
 
-    case Sites.update_site(site, %{vpn_session_duration: vpn_session_duration}) do
-      {:ok, site} ->
-        {:noreply,
-         socket
-         |> assign(:form_changed, false)
-         |> assign(:site_changeset, Sites.change_site(site))}
+    socket =
+      case Config.update_config(configuration, attrs) do
+        {:ok, configuration} ->
+          socket
+          |> assign(:form_changed, false)
+          |> assign(:configuration_changeset, Config.change_config(configuration))
 
-      {:error, site_changeset} ->
-        {:noreply,
-         socket
-         |> assign(:site_changeset, site_changeset)}
-    end
-  end
+        {:error, configuration_changeset} ->
+          socket
+          |> assign(:configuration_changeset, configuration_changeset)
+      end
 
-  @impl Phoenix.LiveView
-  def handle_event("toggle", %{"config" => config} = params, socket) do
-    toggle_value = !!params["value"]
-    {:ok, _conf} = Conf.update_configuration(%{config => toggle_value})
     {:noreply, socket}
   end
 
-  @types %{"oidc" => :openid_connect_providers, "saml" => :saml_identity_providers}
+  @impl Phoenix.LiveView
+  def handle_event("toggle", %{"config" => key} = params, socket) do
+    {:ok, _config} =
+      Config.fetch_db_config!()
+      |> Config.update_config(%{key => !!params["value"]}, socket.assigns.subject)
+
+    configs = FzHttp.Config.fetch_source_and_configs!(@configs)
+    {:noreply, assign(socket, :configs, configs)}
+  end
 
   @impl Phoenix.LiveView
   def handle_event("delete", %{"type" => type, "key" => key}, socket) do
-    field_key = Map.fetch!(@types, type)
+    field_key = String.to_existing_atom(type)
+
+    config = Config.fetch_db_config!()
 
     providers =
-      get_in(socket.assigns.config_changeset, [Access.key!(:data), Access.key!(field_key)])
+      config
+      |> Map.fetch!(field_key)
+      |> Enum.reject(&(&1.id == key))
+      |> Enum.map(&Map.from_struct/1)
 
-    {:ok, conf} = Conf.update_configuration(%{field_key => Map.delete(providers, key)})
+    {:ok, _config} =
+      Config.update_config(config, %{field_key => providers}, socket.assigns.subject)
 
-    {:noreply,
-     socket
-     |> assign(String.to_existing_atom("#{type}_configs"), get_in(conf, [Access.key!(field_key)]))
-     |> assign(:config_changeset, change(conf))}
+    configs = FzHttp.Config.fetch_source_and_configs!(@configs)
+
+    {:noreply, assign(socket, :configs, configs)}
   end
 
-  @hour 3_600
-  @day 24 * @hour
+  def config_has_override?({{source, _source_key}, _key}), do: source not in [:db]
+  def config_has_override?({_source, _key}), do: false
 
-  def session_duration_options do
-    [
-      Never: 0,
-      Once: Site.max_vpn_session_duration(),
-      "Every Hour": @hour,
-      "Every Day": @day,
-      "Every Week": 7 * @day,
-      "Every 30 Days": 30 * @day,
-      "Every 90 Days": 90 * @day
+  def config_value({_source, value}) do
+    value
+  end
+
+  def get_provider(providers, id) do
+    Enum.find(providers, &(&1.id == id))
+  end
+
+  def config_toggle_status({_source, value}) do
+    if(!value, do: "on")
+  end
+
+  def config_override_source({{:env, source_key}, _value}) do
+    "environment variable #{source_key}"
+  end
+
+  def session_duration_options(vpn_session_duration) do
+    options = [
+      {"Never", 0},
+      {"Once", FzHttp.Config.Configuration.Changeset.max_vpn_session_duration()},
+      {"Every Hour", @hour},
+      {"Every Day", @day},
+      {"Every Week", 7 * @day},
+      {"Every 30 Days", 30 * @day},
+      {"Every 90 Days", 90 * @day}
     ]
+
+    values = Enum.map(options, fn {_, value} -> value end)
+
+    if config_value(vpn_session_duration) in values do
+      options
+    else
+      options ++
+        [
+          {"Every #{config_value(vpn_session_duration)} seconds",
+           config_value(vpn_session_duration)}
+        ]
+    end
   end
 
-  defp site_changeset do
-    Sites.get_site!()
-    |> Sites.change_site()
-  end
-
-  @fields ~w(
-    local_auth_enabled
-    disable_vpn_on_oidc_error
-    allow_unprivileged_device_management
-    allow_unprivileged_device_configuration
-    openid_connect_providers
-  )a
-  @override_title """
-  This value is currently overriding the value set in your configuration file.
-  """
-  defp field_titles(changeset) do
-    @fields
-    |> Map.new(fn key ->
-      if is_nil(get_field(changeset, key)) do
-        {key, ""}
-      else
-        {key, @override_title}
-      end
-    end)
+  defp configuration_changeset(attrs \\ %{}) do
+    Config.fetch_db_config!()
+    |> Config.change_config(attrs)
   end
 end

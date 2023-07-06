@@ -5,11 +5,8 @@ defmodule FzWall.CLI.Live do
   Rules operate on the nftables forward chain to deny outgoing packets to
   specified IP addresses, ports, and protocols from Firezone device IPs.
   """
-
   import FzWall.CLI.Helpers.Sets
   import FzWall.CLI.Helpers.Nft
-  import FzCommon.FzNet, only: [ip_type: 1]
-  require Logger
 
   @doc """
   Setup
@@ -67,11 +64,17 @@ defmodule FzWall.CLI.Live do
   end
 
   @doc """
-  Adds device ip to the user's sets.
+  Adds device ip(s) to the user's sets, omitting missing IPs.
   """
   def add_device(device) do
     list_dev_sets(device.user_id)
-    |> Enum.each(fn set_spec -> add_elem(set_spec.name, device[set_spec.ip_type]) end)
+    |> Enum.filter(fn set_spec ->
+      # Only call add_elem/2 for IPs that are present
+      device[set_spec.ip_type]
+    end)
+    |> Enum.each(fn set_spec ->
+      add_elem(set_spec.name, device[set_spec.ip_type])
+    end)
   end
 
   @doc """
@@ -135,18 +138,17 @@ defmodule FzWall.CLI.Live do
     end)
   end
 
-  # xxx: here we could add multiple devices/rules in a single nft call
+  # XXX: here we could add multiple devices/rules in a single nft call
   def restore(%{users: users, devices: devices, rules: rules}) do
     Enum.each(users, &add_user/1)
     Enum.each(devices, &add_device/1)
     Enum.each(rules, &add_rule/1)
   end
 
-  defp proto(ip) do
-    case ip_type("#{ip}") do
-      "IPv4" -> :ip
-      "IPv6" -> :ip6
-      "unknown" -> raise "Unknown protocol."
+  def proto(inet_str) do
+    case FzHttp.Types.INET.cast(inet_str) do
+      {:ok, %{address: address}} when tuple_size(address) == 4 -> :ip
+      {:ok, %{address: address}} when tuple_size(address) == 8 -> :ip6
     end
   end
 

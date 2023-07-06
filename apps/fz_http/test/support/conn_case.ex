@@ -14,20 +14,21 @@ defmodule FzHttpWeb.ConnCase do
   by setting `use FzHttpWeb.ConnCase, async: true`, although
   this option is not recommended for other databases.
   """
-
   use ExUnit.CaseTemplate
-
-  alias Ecto.Adapters.SQL.Sandbox
+  use FzHttp.CaseTemplate
 
   alias FzHttp.UsersFixtures
+  alias FzHttpWeb.Auth.HTML.Authentication
 
   using do
     quote do
       # Import conveniences for testing with connections
+      alias FzHttp.Repo
       import Plug.Conn
       import Phoenix.ConnTest
       import Phoenix.LiveViewTest
       import FzHttp.TestHelpers
+      import FzHttpWeb.ConnCase
 
       # The default endpoint for testing
       @endpoint FzHttpWeb.Endpoint
@@ -35,8 +36,12 @@ defmodule FzHttpWeb.ConnCase do
       use FzHttpWeb, :verified_routes
 
       def current_user(test_conn) do
-        get_session(test_conn)
-        |> FzHttpWeb.Authentication.get_current_user()
+        %{actor: {:user, user}} =
+          test_conn
+          |> get_session()
+          |> Authentication.get_current_subject()
+
+        user
       end
     end
   end
@@ -54,19 +59,17 @@ defmodule FzHttpWeb.ConnCase do
   end
 
   defp authed_conn(role, tags) do
-    user = UsersFixtures.user(%{role: role})
+    user = UsersFixtures.create_user_with_role(role)
 
     conn =
       new_conn()
       |> Plug.Test.init_test_session(%{})
-      |> FzHttpWeb.Authentication.sign_in(user, %{provider: :identity})
+      |> Authentication.sign_in(user, %{provider: :identity})
       |> maybe_put_session(tags)
 
     {user,
      conn
-     |> Plug.Test.init_test_session(%{
-       "guardian_default_token" => conn.private.guardian_default_token
-     })}
+     |> Plug.Conn.put_session("guardian_default_token", conn.private.guardian_default_token)}
   end
 
   defp maybe_put_session(conn, %{session: session}) do
@@ -79,20 +82,17 @@ defmodule FzHttpWeb.ConnCase do
   end
 
   setup tags do
-    :ok = Sandbox.checkout(FzHttp.Repo)
-
-    unless tags[:async] do
-      Sandbox.mode(FzHttp.Repo, {:shared, self()})
-    end
-
     {unprivileged_user, unprivileged_conn} = unprivileged_conn(tags)
     {admin_user, admin_conn} = admin_conn(tags)
 
-    {:ok,
-     unauthed_conn: new_conn(),
-     admin_user: admin_user,
-     unprivileged_user: unprivileged_user,
-     admin_conn: admin_conn,
-     unprivileged_conn: unprivileged_conn}
+    conns = [
+      unauthed_conn: new_conn(),
+      admin_user: admin_user,
+      unprivileged_user: unprivileged_user,
+      admin_conn: admin_conn,
+      unprivileged_conn: unprivileged_conn
+    ]
+
+    {:ok, conns}
   end
 end

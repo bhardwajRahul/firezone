@@ -7,14 +7,14 @@ defmodule FzHttpWeb.DeviceLive.Admin.Show do
 
   @impl Phoenix.LiveView
   def mount(%{"id" => device_id} = _params, _session, socket) do
-    device = Devices.get_device!(device_id)
-
-    if device.user_id == socket.assigns.current_user.id || has_role?(socket, :admin) do
-      {:ok,
-       socket
-       |> assign(assigns(device))}
+    with {:ok, device} <- Devices.fetch_device_by_id(device_id, socket.assigns.subject) do
+      {:ok, assign(socket, assigns(device))}
     else
-      {:ok, not_authorized(socket)}
+      {:error, {:unauthorized, _context}} ->
+        {:ok, not_authorized(socket)}
+
+      {:error, :not_found} ->
+        {:ok, not_authorized(socket)}
     end
   end
 
@@ -28,33 +28,31 @@ defmodule FzHttpWeb.DeviceLive.Admin.Show do
 
   @impl Phoenix.LiveView
   def handle_event("delete_device", _params, socket) do
-    device = socket.assigns.device
-
-    case Devices.delete_device(device) do
+    case Devices.delete_device(socket.assigns.device, socket.assigns.subject) do
       {:ok, _deleted_device} ->
-        {:noreply,
-         socket
-         |> redirect(to: ~p"/devices")}
+        {:noreply, redirect(socket, to: ~p"/devices")}
+
+      {:error, {:unauthorized, _context}} ->
+        {:noreply, not_authorized(socket)}
 
       {:error, msg} ->
-        {:noreply,
-         socket
-         |> put_flash(:error, "Error deleting device: #{msg}")}
+        {:noreply, put_flash(socket, :error, "Error deleting device: #{msg}")}
     end
   end
 
   defp assigns(device) do
+    defaults = Devices.defaults()
+
     [
       device: device,
-      user: Users.get_user!(device.user_id),
+      user: Users.fetch_user_by_id!(device.user_id),
       page_title: device.name,
-      allowed_ips: Devices.allowed_ips(device),
-      dns: Devices.dns(device),
-      endpoint: Devices.endpoint(device),
-      port: Application.fetch_env!(:fz_vpn, :wireguard_port),
-      mtu: Devices.mtu(device),
-      persistent_keepalive: Devices.persistent_keepalive(device),
-      config: Devices.as_config(device)
+      allowed_ips: Devices.get_allowed_ips(device, defaults),
+      dns: Devices.get_dns(device, defaults),
+      endpoint: Devices.get_endpoint(device, defaults),
+      mtu: Devices.get_mtu(device, defaults),
+      persistent_keepalive: Devices.get_persistent_keepalive(device, defaults),
+      config: FzHttpWeb.WireguardConfigView.render("device.conf", %{device: device})
     ]
   end
 end

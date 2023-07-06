@@ -2,6 +2,12 @@ repos:
   - repo: local
     hooks:
       # Elixir config
+      - id: mix-compile
+        name: 'elixir: mix compile'
+        entry: mix compile --force --warnings-as-errors
+        language: system
+        pass_filenames: false
+        files: \.ex$
       - id: mix-format
         name: 'elixir: mix format'
         entry: mix format --check-formatted
@@ -18,12 +24,6 @@ repos:
         language: system
         pass_filenames: false
         files: \.exs*$
-      - id: mix-compile
-        name: 'elixir: mix compile'
-        entry: mix compile --force --warnings-as-errors
-        language: system
-        pass_filenames: false
-        files: \.ex$
       - id: codespell
         name: 'python: codespell'
         entry: codespell
@@ -35,12 +35,6 @@ repos:
         language: system
         pass_filenames: false
         files: \.rb$
-      - id: markdownlint
-        name: 'nodejs: markdownlint'
-        entry: ./docs/node_modules/markdownlint-cli/markdownlint.js
-        language: system
-        pass_filenames: true
-        files: docs/.*\.md$
 
   # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -61,4 +55,4 @@ repos:
           - -b
           - master
           - --pattern
-          - '^(?!((chore|feat|feature|bug|fix|build|ci|docs|style|refactor|perf|test|revert)\/[a-zA-Z0-9\-\.\/]+)$).*'
+          - '^(?!((website|chore|feat|feature|bug|fix|build|ci|docs|style|refactor|perf|test|revert)\/[@a-zA-Z0-9\-\.\/]+)$).*'

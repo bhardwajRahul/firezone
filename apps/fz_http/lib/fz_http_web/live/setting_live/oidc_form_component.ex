@@ -3,8 +3,7 @@ defmodule FzHttpWeb.SettingLive.OIDCFormComponent do
   Form for OIDC configs
   """
   use FzHttpWeb, :live_component
-
-  alias FzHttp.Configurations, as: Conf
+  alias FzHttp.Config
 
   def render(assigns) do
     ~H"""
@@ -62,7 +61,9 @@ defmodule FzHttpWeb.SettingLive.OIDCFormComponent do
             <%= error_tag(f, :scope) %>
           </p>
           <p class="help">
-            Space-delimited list of OpenID scopes.
+            Space-delimited list of OpenID scopes. <code>openid</code>
+            and <code>email</code>
+            are required in order for Firezone to work.
           </p>
         </div>
 
@@ -74,6 +75,7 @@ defmodule FzHttpWeb.SettingLive.OIDCFormComponent do
           <div class="control">
             <%= text_input(f, :response_type,
               disabled: true,
+              placeholder: "code",
               class: "input #{input_error_class(f, :response_type)}"
             ) %>
           </div>
@@ -131,7 +133,8 @@ defmodule FzHttpWeb.SettingLive.OIDCFormComponent do
 
           <div class="control">
             <%= text_input(f, :redirect_uri,
-              placeholder: "#{@external_url}/auth/oidc/#{@provider_id || "{CONFIG_ID}"}/callback/",
+              placeholder:
+                "#{@external_url}auth/oidc/#{input_value(f, :id) || "{CONFIG_ID}"}/callback/",
               class: "input #{input_error_class(f, :redirect_uri)}"
             ) %>
           </div>
@@ -140,7 +143,11 @@ defmodule FzHttpWeb.SettingLive.OIDCFormComponent do
           </p>
           <p class="help">
             Optionally override the Redirect URI. Must match the redirect URI set in your IdP.
-            In most cases you shouldn't change this.
+            In most cases you shouldn't change this. By default
+            <code>
+              <%= "#{@external_url}auth/oidc/#{input_value(f, :id) || "{CONFIG_ID}"}/callback/" %>
+            </code>
+            is used.
           </p>
         </div>
 
@@ -151,7 +158,9 @@ defmodule FzHttpWeb.SettingLive.OIDCFormComponent do
 
           <div class="level">
             <div class="level-left">
-              <p class="help">Automatically create users when signing in for the first time.</p>
+              <p class="help">
+                Automatically provision users when signing in for the first time.
+              </p>
               <p class="help is-danger">
                 <%= error_tag(f, :auto_create_users) %>
               </p>
@@ -171,59 +180,49 @@ defmodule FzHttpWeb.SettingLive.OIDCFormComponent do
 
   def update(assigns, socket) do
     changeset =
-      assigns.providers
-      |> Map.get(assigns.provider_id, %{})
-      |> Map.put("id", assigns.provider_id)
-      |> FzHttp.Conf.OIDCConfig.changeset()
+      assigns.provider
+      |> Map.delete(:__struct__)
+      |> FzHttp.Config.Configuration.OpenIDConnectProvider.create_changeset()
 
-    {:ok,
-     socket
-     |> assign(assigns)
-     |> assign(:external_url, Application.fetch_env!(:fz_http, :external_url))
-     |> assign(:changeset, changeset)}
+    socket =
+      socket
+      |> assign(assigns)
+      |> assign(:external_url, FzHttp.Config.fetch_env!(:fz_http, :external_url))
+      |> assign(:changeset, changeset)
+
+    {:ok, socket}
   end
 
-  def handle_event("save", %{"oidc_config" => params}, socket) do
-    changeset =
-      params
-      |> FzHttp.Conf.OIDCConfig.changeset()
-      |> Map.put(:action, :validate)
+  def handle_event("save", %{"open_id_connect_provider" => params}, socket) do
+    changeset = FzHttp.Config.Configuration.OpenIDConnectProvider.create_changeset(params)
 
-    update =
-      case changeset do
-        %{valid?: true} ->
-          changeset
-          |> Ecto.Changeset.apply_changes()
-          |> Map.from_struct()
-          |> Map.new(fn {k, v} -> {to_string(k), v} end)
-          |> then(fn data ->
-            {id, data} = Map.pop(data, "id")
+    if changeset.valid? do
+      attrs = Ecto.Changeset.apply_changes(changeset)
 
-            %{
-              openid_connect_providers:
-                socket.assigns.providers
-                |> Map.delete(socket.assigns.provider_id)
-                |> Map.put(id, data)
-            }
-          end)
-          |> Conf.update_configuration()
+      config = Config.fetch_db_config!()
 
-        _ ->
-          {:error, changeset}
-      end
+      openid_connect_providers =
+        config.openid_connect_providers
+        |> Enum.reject(&(&1.id == socket.assigns.provider.id))
+        |> Kernel.++([attrs])
+        |> Enum.map(&Map.from_struct/1)
 
-    case update do
-      {:ok, _config} ->
-        :ok = Supervisor.terminate_child(FzHttp.Supervisor, FzHttp.OIDC.StartProxy)
-        {:ok, _pid} = Supervisor.restart_child(FzHttp.Supervisor, FzHttp.OIDC.StartProxy)
+      {:ok, _config} =
+        Config.update_config(
+          config,
+          %{openid_connect_providers: openid_connect_providers},
+          socket.assigns.subject
+        )
 
-        {:noreply,
-         socket
-         |> put_flash(:info, "Updated successfully.")
-         |> redirect(to: socket.assigns.return_to)}
+      socket =
+        socket
+        |> put_flash(:info, "Updated successfully.")
+        |> redirect(to: socket.assigns.return_to)
 
-      {:error, changeset} ->
-        {:noreply, assign(socket, :changeset, changeset)}
+      {:noreply, socket}
+    else
+      socket = assign(socket, :changeset, render_changeset_errors(changeset))
+      {:noreply, socket}
     end
   end
 end

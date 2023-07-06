@@ -2,14 +2,17 @@ defmodule FzHttpWeb.ErrorHelpers do
   @moduledoc """
   Conveniences for translating and building error messages.
   """
-
   use Phoenix.HTML
   import Ecto.Changeset, only: [traverse_errors: 2]
 
   def aggregated_errors(%Ecto.Changeset{} = changeset) do
     traverse_errors(changeset, fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
+      Enum.reduce(opts, msg, fn
+        {key, {:array, value}}, acc ->
+          String.replace(acc, "%{#{key}}", to_string(value))
+
+        {key, value}, acc ->
+          String.replace(acc, "%{#{key}}", to_string(value))
       end)
     end)
     |> Enum.reduce("", fn {key, value}, acc ->
@@ -24,9 +27,14 @@ defmodule FzHttpWeb.ErrorHelpers do
   def error_tag(form, field) do
     values = Keyword.get_values(form.errors, field)
 
-    Enum.map(values, fn error ->
-      content_tag(:span, translate_error(error), class: "help-block")
+    values
+    |> Enum.map(fn error ->
+      content_tag(:span, translate_error(error),
+        class: "help-block"
+        # XXX: data: [phx_error_for: input_id(form, field)]
+      )
     end)
+    |> Enum.intersperse(", ")
   end
 
   @doc """

@@ -29,10 +29,9 @@ services:
       - |
         cat <<EOF > /etc/caddy/Caddyfile && caddy run --config /etc/caddy/Caddyfile
 
-        https:// {
+        ${EXTERNAL_URL} {
           log
-          reverse_proxy * 172.25.0.100:13000
-          ${TLS_OPTS:-}
+          reverse_proxy * 172.25.0.100:${PHOENIX_PORT:-13000}
         }
         EOF
     network_mode: "host"
@@ -40,12 +39,12 @@ services:
       <<: *default-deploy
 
   firezone:
-    image: firezone/firezone
+    image: firezone/firezone:${VERSION:-latest}
     ports:
-      - 51820:51820/udp
+      - ${WIREGUARD_PORT:-51820}:${WIREGUARD_PORT:-51820}/udp
     env_file:
       # This should contain a list of env vars for configuring Firezone.
-      # See https://docs.firezone.dev/reference/env-vars for more info.
+      # See https://www.firezone.dev/docs/reference/env-vars for more info.
       - ${FZ_INSTALL_DIR:-.}/.env
     volumes:
       # IMPORTANT: Persists WireGuard private key and other data. If
@@ -66,6 +65,8 @@ services:
     networks:
       firezone-network:
         ipv4_address: 172.25.0.100
+        ipv6_address: 2001:3990:3990::99
+
     deploy:
       <<: *default-deploy
 
@@ -90,7 +91,10 @@ volumes:
 
 networks:
   firezone-network:
+    enable_ipv6: true
     driver: bridge
     ipam:
       config:
         - subnet: 172.25.0.0/16
+        - subnet: 2001:3990:3990::/64
+          gateway: 2001:3990:3990::1

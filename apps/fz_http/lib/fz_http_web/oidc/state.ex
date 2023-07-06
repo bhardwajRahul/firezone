@@ -25,7 +25,7 @@ defmodule FzHttpWeb.OIDC.State do
   end
 
   def new do
-    FzCommon.FzCrypto.rand_string()
+    FzHttp.Crypto.rand_string()
   end
 
   defp cookie_opts do
@@ -33,7 +33,7 @@ defmodule FzHttpWeb.OIDC.State do
       max_age: @oidc_state_valid_duration,
       sign: true,
       same_site: "Lax",
-      secure: Application.fetch_env!(:fz_http, :cookie_secure)
+      secure: FzHttp.Config.fetch_env!(:fz_http, :cookie_secure)
     ]
   end
 end

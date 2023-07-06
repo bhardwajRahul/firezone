@@ -1,14 +1,8 @@
-# Used by "mix format"
 [
-  import_deps: [
-    :ecto,
-    :phoenix
-  ],
+  plugins: [Phoenix.LiveView.HTMLFormatter],
+  subdirectories: ["apps/*"],
   inputs: [
-    "*.{heex,ex,exs}",
-    "{config,apps,priv}/**/*.{heex,ex,exs}"
-  ],
-  plugins: [
-    Phoenix.LiveView.HTMLFormatter
+    "*.{ex,exs}",
+    "{config,priv}/**/*.{ex,exs}"
   ]
 ]

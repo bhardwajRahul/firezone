@@ -1,5 +1,5 @@
-ARG ELIXIR_VERSION=1.14.2
-ARG OTP_VERSION=25.1.2
+ARG ELIXIR_VERSION=1.14.3
+ARG OTP_VERSION=25.2.1
 ARG ALPINE_VERSION=3.16.3
 
 ARG BUILDER_IMAGE="firezone/elixir:${ELIXIR_VERSION}-otp-${OTP_VERSION}"
@@ -8,7 +8,7 @@ ARG RUNNER_IMAGE="alpine:${ALPINE_VERSION}"
 FROM ${BUILDER_IMAGE} as builder
 
 # install build dependencies
-RUN apk add nodejs npm build-base git python3
+RUN apk add nodejs yarn build-base git python3
 
 # prepare build dir
 WORKDIR /app
@@ -22,7 +22,6 @@ ENV MIX_ENV="prod"
 
 # install mix dependencies
 COPY mix.exs mix.lock ./
-COPY apps/fz_common/mix.exs ./apps/fz_common/mix.exs
 COPY apps/fz_http/mix.exs ./apps/fz_http/mix.exs
 COPY apps/fz_vpn/mix.exs ./apps/fz_vpn/mix.exs
 COPY apps/fz_wall/mix.exs ./apps/fz_wall/mix.exs
@@ -45,8 +44,8 @@ ENV VERSION=$VERSION
 
 # compile assets
 RUN cd apps/fz_http/assets \
-    && npm install \
-    && npm run deploy \
+    && yarn install --frozen-lockfile \
+    && yarn deploy \
     && cd .. \
     && mix phx.digest
 
